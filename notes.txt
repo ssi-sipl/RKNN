@@ -1,1 +1,4 @@
 NPU Load: sudo cat /sys/kernel/debug/rknpu/load
+
+wget https://filesamples.com/samples/video/mp4/sample_640x360.mp4 -O test_video.mp4
+ffmpeg -i test_video.mp4
