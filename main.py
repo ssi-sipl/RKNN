@@ -70,6 +70,30 @@ def letterbox(img):
 # ──────────────────────────────────────────────
 # POSTPROCESS
 # ──────────────────────────────────────────────
+
+def nms(boxes, scores, iou_thresh):
+    x1, y1, x2, y2 = boxes.T
+    areas = (x2 - x1) * (y2 - y1)
+    order = scores.argsort()[::-1]
+
+    keep = []
+
+    while order.size:
+        i = order[0]
+        keep.append(i)
+
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+
+        inter = np.maximum(0, xx2 - xx1) * np.maximum(0, yy2 - yy1)
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+
+        order = order[np.where(iou <= iou_thresh)[0] + 1]
+
+    return keep
+
 def postprocess(outputs, shape, scale, pad):
     cfg = get_config()
 
@@ -90,17 +114,18 @@ def postprocess(outputs, shape, scale, pad):
     if len(conf) == 0:
         return [], [], []
 
+    # scale back
     boxes[:, 0] = (boxes[:, 0] - pad[0]) / scale
     boxes[:, 1] = (boxes[:, 1] - pad[1]) / scale
     boxes[:, 2:] /= scale
 
     # xywh → xyxy
-    boxes[:, 0] -= boxes[:, 2]/2
-    boxes[:, 1] -= boxes[:, 3]/2
+    boxes[:, 0] -= boxes[:, 2] / 2
+    boxes[:, 1] -= boxes[:, 3] / 2
     boxes[:, 2] += boxes[:, 0]
     boxes[:, 3] += boxes[:, 1]
 
-    # FILTER CLASSES
+    # CLASS FILTER
     filtered = [
         (b, s, c)
         for b, s, c in zip(boxes, conf, cls)
@@ -110,8 +135,12 @@ def postprocess(outputs, shape, scale, pad):
     if not filtered:
         return [], [], []
 
-    boxes, conf, cls = zip(*filtered)
-    return np.array(boxes), np.array(conf), np.array(cls)
+    boxes, conf, cls = map(np.array, zip(*filtered))
+
+    # 🔥 NMS FIX
+    keep = nms(boxes, conf, IOU)
+
+    return boxes[keep], conf[keep], cls[keep]
 
 # ──────────────────────────────────────────────
 # CAPTURE THREAD (REAL-TIME FIX)
