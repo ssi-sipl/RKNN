@@ -7,6 +7,7 @@ import threading
 import argparse
 from queue import Queue, Empty
 from rknnlite.api import RKNNLite
+import os
 
 # ──────────────────────────────────────────────
 # CLI ARGUMENTS (CONTROLLED FROM NODE)
@@ -30,7 +31,7 @@ SHOW_CONF = bool(args.show_conf)
 # ──────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────
-RKNN_MODEL_PATH = "yolov8s.rknn"
+RKNN_MODEL_PATH = os.path.join(os.path.dirname(__file__), "yolov8s.rknn")
 INPUT_SIZE = (640, 640)
 CORE_MASK = RKNNLite.NPU_CORE_AUTO
 

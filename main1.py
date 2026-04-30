@@ -9,6 +9,7 @@ import os
 from queue import Queue, Empty
 from rknnlite.api import RKNNLite
 
+
 # ──────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────
