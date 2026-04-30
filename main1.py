@@ -4,36 +4,23 @@ import cv2
 import numpy as np
 import time
 import threading
-import argparse
+import json
+import os
 from queue import Queue, Empty
 from rknnlite.api import RKNNLite
-
-# ──────────────────────────────────────────────
-# CLI ARGUMENTS (CONTROLLED FROM NODE)
-# ──────────────────────────────────────────────
-parser = argparse.ArgumentParser()
-
-parser.add_argument("--rtsp", required=True)
-parser.add_argument("--conf", type=float, default=0.45)
-parser.add_argument("--iou", type=float, default=0.45)
-parser.add_argument("--show_labels", type=int, default=1)
-parser.add_argument("--show_conf", type=int, default=1)
-
-args = parser.parse_args()
-
-RTSP_URL = args.rtsp
-CONF_THRESHOLD = args.conf
-IOU_THRESHOLD = args.iou
-SHOW_LABELS = bool(args.show_labels)
-SHOW_CONF = bool(args.show_conf)
 
 # ──────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────
 RKNN_MODEL_PATH = "yolov8s.rknn"
+RTSP_URL = "rtsp://admin:123456Ai@192.168.1.69:554/snl/live/1/1"
+
+CONFIG_PATH = "config.json"
+
 INPUT_SIZE = (640, 640)
 CORE_MASK = RKNNLite.NPU_CORE_AUTO
 
+# YOLO CLASSES
 COCO_CLASSES = [
     "person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
     "traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
@@ -46,6 +33,25 @@ COCO_CLASSES = [
     "remote","keyboard","cell phone","microwave","oven","toaster","sink","refrigerator",
     "book","clock","vase","scissors","teddy bear","hair drier","toothbrush"
 ]
+
+# ──────────────────────────────────────────────
+# CONFIG LOADER (HOT RELOAD)
+# ──────────────────────────────────────────────
+last_mtime = 0
+config = {}
+
+def get_config():
+    global last_mtime, config
+    try:
+        mtime = os.path.getmtime(CONFIG_PATH)
+        if mtime != last_mtime:
+            with open(CONFIG_PATH, "r") as f:
+                config = json.load(f)
+            last_mtime = mtime
+            print("[INFO] Config reloaded")
+    except:
+        pass
+    return config
 
 # ──────────────────────────────────────────────
 # PREPROCESS
@@ -62,14 +68,16 @@ def letterbox(img):
     return img_p, scale, (left, top)
 
 # ──────────────────────────────────────────────
-# NMS
+# POSTPROCESS
 # ──────────────────────────────────────────────
+
 def nms(boxes, scores, iou_thresh):
     x1, y1, x2, y2 = boxes.T
     areas = (x2 - x1) * (y2 - y1)
     order = scores.argsort()[::-1]
 
     keep = []
+
     while order.size:
         i = order[0]
         keep.append(i)
@@ -86,10 +94,13 @@ def nms(boxes, scores, iou_thresh):
 
     return keep
 
-# ──────────────────────────────────────────────
-# POSTPROCESS
-# ──────────────────────────────────────────────
 def postprocess(outputs, shape, scale, pad):
+    cfg = get_config()
+
+    CONF = cfg.get("confidence_threshold", 0.45)
+    IOU  = cfg.get("iou_threshold", 0.45)
+    enabled = set(cfg.get("enabled_classes", COCO_CLASSES))
+
     pred = outputs[0][0].T
     boxes = pred[:, :4]
     scores = pred[:, 4:]
@@ -97,80 +108,42 @@ def postprocess(outputs, shape, scale, pad):
     conf = scores.max(axis=1)
     cls  = scores.argmax(axis=1)
 
-    mask = conf >= CONF_THRESHOLD
+    mask = conf >= CONF
     boxes, conf, cls = boxes[mask], conf[mask], cls[mask]
 
     if len(conf) == 0:
         return [], [], []
 
+    # scale back
     boxes[:, 0] = (boxes[:, 0] - pad[0]) / scale
     boxes[:, 1] = (boxes[:, 1] - pad[1]) / scale
     boxes[:, 2:] /= scale
 
+    # xywh → xyxy
     boxes[:, 0] -= boxes[:, 2] / 2
     boxes[:, 1] -= boxes[:, 3] / 2
     boxes[:, 2] += boxes[:, 0]
     boxes[:, 3] += boxes[:, 1]
 
-    keep = nms(boxes, conf, IOU_THRESHOLD)
+    # CLASS FILTER
+    filtered = [
+        (b, s, c)
+        for b, s, c in zip(boxes, conf, cls)
+        if COCO_CLASSES[int(c)] in enabled
+    ]
+
+    if not filtered:
+        return [], [], []
+
+    boxes, conf, cls = map(np.array, zip(*filtered))
+
+    # 🔥 NMS FIX
+    keep = nms(boxes, conf, IOU)
 
     return boxes[keep], conf[keep], cls[keep]
 
 # ──────────────────────────────────────────────
-# SIMPLE TRACKER
-# ──────────────────────────────────────────────
-class SimpleTracker:
-    def __init__(self, max_lost=10, iou_threshold=0.3):
-        self.next_id = 0
-        self.tracks = {}
-        self.lost = {}
-        self.max_lost = max_lost
-        self.iou_threshold = iou_threshold
-
-    def iou(self, a, b):
-        xA = max(a[0], b[0])
-        yA = max(a[1], b[1])
-        xB = min(a[2], b[2])
-        yB = min(a[3], b[3])
-        inter = max(0, xB-xA) * max(0, yB-yA)
-        areaA = (a[2]-a[0])*(a[3]-a[1])
-        areaB = (b[2]-b[0])*(b[3]-b[1])
-        return inter / (areaA + areaB - inter + 1e-6)
-
-    def update(self, detections):
-        updated = {}
-
-        for tid, tbox in self.tracks.items():
-            best_iou = 0
-            best = None
-            for d in detections:
-                iou_val = self.iou(tbox, d)
-                if iou_val > best_iou:
-                    best_iou = iou_val
-                    best = d
-
-            if best_iou > self.iou_threshold:
-                updated[tid] = best
-                self.lost[tid] = 0
-            else:
-                self.lost[tid] += 1
-
-        self.tracks = {
-            tid: box for tid, box in updated.items()
-            if self.lost.get(tid, 0) <= self.max_lost
-        }
-
-        for d in detections:
-            matched = any(self.iou(d, t) > self.iou_threshold for t in self.tracks.values())
-            if not matched:
-                self.tracks[self.next_id] = d
-                self.lost[self.next_id] = 0
-                self.next_id += 1
-
-        return self.tracks
-
-# ──────────────────────────────────────────────
-# CAPTURE
+# CAPTURE THREAD (REAL-TIME FIX)
 # ──────────────────────────────────────────────
 def capture_thread(rtsp_url, raw_q, stop_evt):
     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
@@ -181,6 +154,7 @@ def capture_thread(rtsp_url, raw_q, stop_evt):
         if not ret:
             continue
 
+        # 🔥 CRITICAL: DROP OLD FRAMES
         while not raw_q.empty():
             try:
                 raw_q.get_nowait()
@@ -207,21 +181,20 @@ def inference_thread(rknn, raw_q, res_q, stop_evt):
 
         res_q.put((frame, boxes, scores, cls))
 
+
+
 # ──────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────
 def main():
-    print(f"[INFO] Starting inference on: {RTSP_URL}")
-
     rknn = RKNNLite()
     rknn.load_rknn(RKNN_MODEL_PATH)
     rknn.init_runtime(core_mask=CORE_MASK)
 
-    raw_q = Queue(maxsize=1)
+    raw_q = Queue(maxsize=1)   # 🔥 important
     res_q = Queue(maxsize=1)
 
     stop = threading.Event()
-    tracker = SimpleTracker()
 
     threading.Thread(target=capture_thread,
                      args=(RTSP_URL, raw_q, stop),
@@ -239,25 +212,24 @@ def main():
         except Empty:
             break
 
-        tracks = tracker.update(boxes)
+        cfg = get_config()
 
-        for tid, box in tracks.items():
-            x1, y1, x2, y2 = map(int, box)
+        for b, s, c in zip(boxes, scores, cls):
+            x1, y1, x2, y2 = map(int, b)
+            label = ""
 
-            label = f"ID {tid}"
+            if cfg.get("show_labels", True):
+                label += COCO_CLASSES[int(c)]
 
-            for b, s, c in zip(boxes, scores, cls):
-                if tracker.iou(box, b) > 0.5:
-                    if SHOW_LABELS:
-                        label += f" {COCO_CLASSES[int(c)]}"
-                    if SHOW_CONF:
-                        label += f" {s:.2f}"
-                    break
+            if cfg.get("show_confidence", True):
+                label += f" {s:.2f}"
 
             cv2.rectangle(frame, (x1,y1),(x2,y2),(0,255,0),2)
-            cv2.putText(frame, label, (x1, y1-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                        (0,255,0), 2)
+
+            if label:
+                cv2.putText(frame, label, (x1, y1-5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                            (0,255,0), 2)
 
         fps = 1 / (time.time() - t_last)
         t_last = time.time()
