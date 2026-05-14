@@ -1,0 +1,33 @@
+sudo apt update
+
+sudo apt install -y \
+build-essential \
+cmake \
+pkg-config \
+libsdl2-dev \
+ffmpeg \
+libavcodec-dev \
+libavformat-dev \
+libavutil-dev \
+libswscale-dev \
+libopencv-dev
+
+
+
+Build:
+
+g++ rknn_rtsp.cpp \
+-o rknn_rtsp \
+-lrknnrt \
+-lavformat \
+-lavcodec \
+-lavutil \
+-lswscale \
+-lSDL2 \
+`pkg-config --cflags --libs opencv4` \
+-pthread
+
+
+Run:
+
+./rknn_rtsp "rtsp://..."
