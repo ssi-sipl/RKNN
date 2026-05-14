@@ -201,61 +201,55 @@ def capture_loop():
     global latest_frame
     global running
 
-RECONNECT:
-
-    if not running:
-        return
-
-    print("connecting...")
-
-    cap=cv2.VideoCapture(
-        RTSP,
-        cv2.CAP_FFMPEG
-    )
-
-    cap.set(
-        cv2.CAP_PROP_BUFFERSIZE,
-        1
-    )
-
-    cap.set(
-        cv2.CAP_PROP_FRAME_WIDTH,
-        640
-    )
-
-    cap.set(
-        cv2.CAP_PROP_FRAME_HEIGHT,
-        360
-    )
-
-    if not cap.isOpened():
-
-        time.sleep(1)
-
-        goto=0
-
-        goto
-
     while running:
 
-        ok,frame=cap.read()
+        print("[RTSP] Connecting...")
 
-        if not ok:
+        cap = cv2.VideoCapture(
+            RTSP,
+            cv2.CAP_FFMPEG
+        )
 
-            print("stream lost")
+        cap.set(cv2.CAP_PROP_BUFFERSIZE,1)
 
-            break
+        cap.set(
+            cv2.CAP_PROP_FRAME_WIDTH,
+            640
+        )
 
-        with frame_lock:
+        cap.set(
+            cv2.CAP_PROP_FRAME_HEIGHT,
+            360
+        )
 
-            latest_frame=frame
+        if not cap.isOpened():
 
-    cap.release()
+            print("[RTSP] Connection failed")
 
-    time.sleep(1)
+            time.sleep(1)
 
-    capture_loop()
+            continue
 
+        print("[RTSP] Connected")
+
+        while running:
+
+            ok, frame = cap.read()
+
+            if not ok:
+
+                print("[RTSP] Stream lost")
+
+                break
+
+            with frame_lock:
+
+                latest_frame = frame
+
+        cap.release()
+
+        time.sleep(1)
+        
 # ---------------------------------------
 # INFERENCE
 # ---------------------------------------
@@ -345,6 +339,8 @@ def main():
         with result_lock:
 
             if latest_result is None:
+
+                time.sleep(.005)
 
                 continue
 
