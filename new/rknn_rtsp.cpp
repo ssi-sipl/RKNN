@@ -117,28 +117,21 @@ AVDictionary* opts=nullptr;
 av_dict_set(
 &opts,
 "rtsp_transport",
-"udp",
+"tcp",
 0
 );
 
 av_dict_set(
 &opts,
-"fflags",
-"nobuffer",
+"buffer_size",
+"1024000",
 0
 );
 
 av_dict_set(
 &opts,
-"flags",
-"low_delay",
-0
-);
-
-av_dict_set(
-&opts,
-"max_delay",
-"0",
+"stimeout",
+"3000000",
 0
 );
 
@@ -397,248 +390,293 @@ goto RECONNECT;
 
 void inference_loop(){
 
-while(running){
+    AVFrame* local_frame=av_frame_alloc();
 
-if(
-!infer_ready
-){
+    while(running){
 
-sleep_ms(1);
+        if(!infer_ready){
 
-continue;
-}
+            sleep_ms(1);
+            continue;
+        }
 
-SDL_LockMutex(
-infer_mutex
-);
+        SDL_LockMutex(infer_mutex);
 
-AVFrame* f=
-infer_frame;
+        if(
+            !infer_frame ||
+            !infer_frame->data[0] ||
+            video_w<=0 ||
+            video_h<=0
+        ){
 
-if(!f){
+            SDL_UnlockMutex(infer_mutex);
 
-SDL_UnlockMutex(
-infer_mutex
-);
+            sleep_ms(5);
 
-continue;
-}
+            continue;
+        }
 
-cv::Mat yuv(
+        // Deep copy frame reference
+        av_frame_unref(local_frame);
 
-video_h+
-video_h/2,
+        if(
+            av_frame_ref(
+                local_frame,
+                infer_frame
+            )<0
+        ){
 
-video_w,
+            SDL_UnlockMutex(
+                infer_mutex
+            );
 
-CV_8UC1,
+            continue;
+        }
 
-f->data[0]
+        SDL_UnlockMutex(
+            infer_mutex
+        );
 
-);
+        if(
+            !local_frame->data[0]
+        ){
 
-cv::Mat bgr;
+            continue;
+        }
 
-cv::cvtColor(
+        cv::Mat yuv(
 
-yuv,
+            video_h+
+            video_h/2,
 
-bgr,
+            video_w,
 
-cv::COLOR_YUV2BGR_I420
-);
+            CV_8UC1,
 
-SDL_UnlockMutex(
-infer_mutex
-);
+            local_frame->data[0]
 
-cv::Mat input;
+        );
 
-cv::resize(
+        if(
+            yuv.empty()
+        ){
 
-bgr,
+            continue;
+        }
 
-input,
+        cv::Mat bgr;
 
-cv::Size(
-640,
-640
-)
+        try{
 
-);
+            cv::cvtColor(
 
-cv::cvtColor(
+                yuv,
 
-input,
+                bgr,
 
-input,
+                cv::COLOR_YUV2BGR_I420
 
-cv::COLOR_BGR2RGB
-);
+            );
 
-rknn_input inputs[1];
+        }catch(...){
 
-memset(
-inputs,
-0,
-sizeof(inputs)
-);
+            continue;
+        }
 
-inputs[0].index=0;
+        if(
+            bgr.empty()
+        ){
 
-inputs[0].type=
-RKNN_TENSOR_UINT8;
+            continue;
+        }
 
-inputs[0].size=
-640*640*3;
+        cv::Mat input;
 
-inputs[0].fmt=
-RKNN_TENSOR_NHWC;
+        cv::resize(
 
-inputs[0].buf=
-input.data;
+            bgr,
 
-rknn_inputs_set(
-rknn_ctx,
-1,
-inputs
-);
-
-rknn_run(
-rknn_ctx,
-nullptr
-);
-
-rknn_output outputs[1];
-
-memset(
-outputs,
-0,
-sizeof(outputs)
-);
-
-outputs[0]
-.want_float=1;
-
-rknn_outputs_get(
-rknn_ctx,
-1,
-outputs,
-nullptr
-);
-
-float* out=
-(float*)
-outputs[0].buf;
-
-std::vector<
-Detection
-> local;
-
-for(
-int i=0;
-i<8400;
-i++
-){
-
-float x=
-out[0*8400+i];
-
-float y=
-out[1*8400+i];
-
-float w=
-out[2*8400+i];
-
-float h=
-out[3*8400+i];
-
-float best=0;
-
-int cls=-1;
-
-for(
-int c=4;
-c<84;
-c++
-){
-
-float score=
-out[
-c*8400+i
-];
-
-if(
-score>
-best
-){
-
-best=
-score;
-
-cls=
-c-4;
-}
-}
-
-if(
-best<0.45
-)
-continue;
-
-Detection d;
-
-d.x1=
-(x-w/2)
-*video_w
-/640;
-
-d.y1=
-(y-h/2)
-*video_h
-/640;
-
-d.x2=
-(x+w/2)
-*video_w
-/640;
-
-d.y2=
-(y+h/2)
-*video_h
-/640;
-
-d.score=
-best;
-
-d.cls=
-cls;
-
-local.push_back(
-d
-);
-}
-
-SDL_LockMutex(
-det_mutex
-);
-
-detections=
-local;
-
-SDL_UnlockMutex(
-det_mutex
-);
-
-rknn_outputs_release(
-rknn_ctx,
-1,
-outputs
-);
-
-infer_ready=false;
-
-}
+            input,
+
+            cv::Size(
+                640,
+                640
+            )
+
+        );
+
+        cv::cvtColor(
+
+            input,
+
+            input,
+
+            cv::COLOR_BGR2RGB
+        );
+
+        rknn_input inputs[1];
+
+        memset(
+            inputs,
+            0,
+            sizeof(inputs)
+        );
+
+        inputs[0].index=0;
+        inputs[0].type=
+            RKNN_TENSOR_UINT8;
+
+        inputs[0].fmt=
+            RKNN_TENSOR_NHWC;
+
+        inputs[0].size=
+            640*640*3;
+
+        inputs[0].buf=
+            input.data;
+
+        if(
+            rknn_inputs_set(
+                rknn_ctx,
+                1,
+                inputs
+            )<0
+        ){
+
+            continue;
+        }
+
+        if(
+            rknn_run(
+                rknn_ctx,
+                nullptr
+            )<0
+        ){
+
+            continue;
+        }
+
+        rknn_output outputs[1];
+
+        memset(
+            outputs,
+            0,
+            sizeof(outputs)
+        );
+
+        outputs[0].want_float=1;
+
+        if(
+            rknn_outputs_get(
+                rknn_ctx,
+                1,
+                outputs,
+                nullptr
+            )<0
+        ){
+
+            continue;
+        }
+
+        float* out=
+            (float*)outputs[0].buf;
+
+        std::vector<Detection> local;
+
+        for(
+            int i=0;
+            i<8400;
+            i++
+        ){
+
+            float x=
+                out[i];
+
+            float y=
+                out[8400+i];
+
+            float w=
+                out[16800+i];
+
+            float h=
+                out[25200+i];
+
+            float best=0;
+            int cls=-1;
+
+            for(
+                int c=4;
+                c<84;
+                c++
+            ){
+
+                float s=
+                out[
+                c*8400+i
+                ];
+
+                if(
+                    s>best
+                ){
+
+                    best=s;
+                    cls=c-4;
+                }
+            }
+
+            if(
+                best<0.45
+            )
+            continue;
+
+            Detection d;
+
+            d.x1=
+            (x-w/2)
+            *video_w/640;
+
+            d.y1=
+            (y-h/2)
+            *video_h/640;
+
+            d.x2=
+            (x+w/2)
+            *video_w/640;
+
+            d.y2=
+            (y+h/2)
+            *video_h/640;
+
+            d.score=best;
+
+            d.cls=cls;
+
+            local.push_back(d);
+        }
+
+        SDL_LockMutex(
+            det_mutex
+        );
+
+        detections=
+            local;
+
+        SDL_UnlockMutex(
+            det_mutex
+        );
+
+        rknn_outputs_release(
+            rknn_ctx,
+            1,
+            outputs
+        );
+
+        infer_ready=false;
+    }
+
+    av_frame_free(
+        &local_frame
+    );
 }
 
 int main(
