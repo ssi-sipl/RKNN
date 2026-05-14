@@ -16,17 +16,35 @@ import argparse
 import numpy as np
 from rknnlite.api import RKNNLite
 
-# ------------------------------------
-# CONFIG
-# ------------------------------------
+# ---------------------------------
+# ARGS
+# ---------------------------------
 
-INPUT_SIZE=640
-MODEL_PATH="yolov8s.rknn"
+parser=argparse.ArgumentParser()
 
-CONF=0.45
-IOU=.45
+parser.add_argument("--rtsp",required=True)
+parser.add_argument("--conf",type=float,default=.45)
+parser.add_argument("--iou",type=float,default=.45)
+
+args=parser.parse_args()
+
+RTSP=args.rtsp
+CONF=args.conf
+IOU=args.iou
+
+# ---------------------------------
+# RKNN
+# ---------------------------------
+
+MODEL="yolov8s.rknn"
 
 CORE=RKNNLite.NPU_CORE_0
+
+INPUT=640
+
+# ---------------------------------
+# SHARED
+# ---------------------------------
 
 running=True
 
@@ -36,39 +54,24 @@ latest_result=None
 frame_lock=threading.Lock()
 result_lock=threading.Lock()
 
-# ------------------------------------
-# CLI
-# ------------------------------------
-
-parser=argparse.ArgumentParser()
-
-parser.add_argument("--rtsp",required=True)
-
-args=parser.parse_args()
-
-RTSP=args.rtsp
-
-# ------------------------------------
-# CLASSES
-# ------------------------------------
+# ---------------------------------
+# COCO
+# ---------------------------------
 
 COCO_CLASSES=[
 "person","bicycle","car","motorcycle",
 "bus","truck","dog","cat"
 ]
 
-# ------------------------------------
+# ---------------------------------
 # LETTERBOX
-# ------------------------------------
+# ---------------------------------
 
 def letterbox(img):
 
     h,w=img.shape[:2]
 
-    scale=min(
-        INPUT_SIZE/w,
-        INPUT_SIZE/h
-    )
+    scale=min(INPUT/w,INPUT/h)
 
     nw=int(w*scale)
     nh=int(h*scale)
@@ -79,17 +82,13 @@ def letterbox(img):
     )
 
     canvas=np.full(
-        (
-            INPUT_SIZE,
-            INPUT_SIZE,
-            3
-        ),
+        (INPUT,INPUT,3),
         114,
         dtype=np.uint8
     )
 
-    left=(INPUT_SIZE-nw)//2
-    top=(INPUT_SIZE-nh)//2
+    left=(INPUT-nw)//2
+    top=(INPUT-nh)//2
 
     canvas[
         top:top+nh,
@@ -98,18 +97,18 @@ def letterbox(img):
 
     return canvas,scale,(left,top)
 
-# ------------------------------------
+# ---------------------------------
 # NMS
-# ------------------------------------
+# ---------------------------------
 
-def nms(boxes,scores,th):
+def nms(boxes,scores,thr):
 
     x1=boxes[:,0]
     y1=boxes[:,1]
     x2=boxes[:,2]
     y2=boxes[:,3]
 
-    areas=(x2-x1)*(y2-y1)
+    area=(x2-x1)*(y2-y1)
 
     order=scores.argsort()[::-1]
 
@@ -149,24 +148,17 @@ def nms(boxes,scores,th):
             yy2-yy1
         )
 
-        iou=inter/(
-            areas[i]+
-            areas[order[1:]]
-            -inter+
-            1e-6
-        )
+        iou=inter/(area[i]+area[order[1:]]-inter+1e-6)
 
         order=order[
-            np.where(
-                iou<=th
-            )[0]+1
+            np.where(iou<=thr)[0]+1
         ]
 
     return keep
 
-# ------------------------------------
-# POSTPROCESS
-# ------------------------------------
+# ---------------------------------
+# POST
+# ---------------------------------
 
 def postprocess(outputs,shape,scale,pad):
 
@@ -185,7 +177,6 @@ def postprocess(outputs,shape,scale,pad):
     cls=cls[mask]
 
     if len(conf)==0:
-
         return [],[],[]
 
     boxes[:,0]=(boxes[:,0]-pad[0])/scale
@@ -211,67 +202,61 @@ def postprocess(outputs,shape,scale,pad):
         cls[keep]
     )
 
-# ------------------------------------
+# ---------------------------------
 # CAPTURE
-# ------------------------------------
+# ---------------------------------
 
 def capture_loop():
 
     global latest_frame
     global running
 
+    cap=cv2.VideoCapture(
+        RTSP,
+        cv2.CAP_FFMPEG
+    )
+
+    cap.set(
+        cv2.CAP_PROP_BUFFERSIZE,
+        1
+    )
+
+    if not cap.isOpened():
+
+        print("open failed")
+
+        running=False
+
+        return
+
+    print("connected")
+
     while running:
 
-        print("[RTSP] Connecting")
+        ret,frame=cap.read()
 
-        cap=cv2.VideoCapture(
-            RTSP,
-            cv2.CAP_FFMPEG
-        )
+        if not ret:
 
-        cap.set(
-            cv2.CAP_PROP_BUFFERSIZE,
-            1
-        )
+            print("frame failed")
 
-        if not cap.isOpened():
-
-            print("[RTSP] open failed")
-
-            time.sleep(2)
+            time.sleep(.1)
 
             continue
 
-        print("[RTSP] Connected")
+        frame=cv2.resize(
+            frame,
+            (960,540)
+        )
 
-        while running:
+        with frame_lock:
 
-            ok,frame=cap.read()
+            latest_frame=frame.copy()
 
-            if not ok:
+    cap.release()
 
-                print(
-                    "[RTSP] stream lost"
-                )
-
-                break
-
-            frame=cv2.resize(
-                frame,
-                (960,540)
-            )
-
-            with frame_lock:
-
-                latest_frame=frame
-
-        cap.release()
-
-        time.sleep(3)
-
-# ------------------------------------
-# INFERENCE
-# ------------------------------------
+# ---------------------------------
+# INFER
+# ---------------------------------
 
 def infer_loop():
 
@@ -279,10 +264,10 @@ def infer_loop():
 
     rknn=RKNNLite()
 
-    print("loading")
+    print("load")
 
     rknn.load_rknn(
-        MODEL_PATH
+        MODEL
     )
 
     print("runtime")
@@ -297,13 +282,17 @@ def infer_loop():
 
             if latest_frame is None:
 
-                time.sleep(
-                    .005
-                )
+                frame=None
 
-                continue
+            else:
 
-            frame=latest_frame.copy()
+                frame=latest_frame.copy()
+
+        if frame is None:
+
+            time.sleep(.005)
+
+            continue
 
         img,scale,pad=letterbox(
             frame
@@ -339,13 +328,11 @@ def infer_loop():
                 cls
             )
 
-# ------------------------------------
+# ---------------------------------
 # MAIN
-# ------------------------------------
+# ---------------------------------
 
 def main():
-
-    global running
 
     t1=threading.Thread(
         target=capture_loop,
@@ -362,19 +349,19 @@ def main():
 
     prev=time.time()
 
-    while True:
-
-        if latest_result is None:
-
-            time.sleep(
-                .01
-            )
-
-            continue
+    while running:
 
         with result_lock:
 
-            frame,boxes,scores,cls=latest_result
+            data=latest_result
+
+        if data is None:
+
+            time.sleep(.01)
+
+            continue
+
+        frame,boxes,scores,cls=data
 
         for b,s,c in zip(
             boxes,
@@ -387,11 +374,6 @@ def main():
                 b
             )
 
-            label=(
-                f"{COCO_CLASSES[int(c)]} "
-                f"{s:.2f}"
-            )
-
             cv2.rectangle(
                 frame,
                 (x1,y1),
@@ -402,8 +384,8 @@ def main():
 
             cv2.putText(
                 frame,
-                label,
-                (x1,y1-5),
+                f"{COCO_CLASSES[int(c)]} {s:.2f}",
+                (x1,y1-10),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 .6,
                 (0,255,0),
@@ -432,9 +414,6 @@ def main():
         )
 
         if cv2.waitKey(1)==27:
-
-            running=False
-
             break
 
     cv2.destroyAllWindows()
