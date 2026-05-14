@@ -12,9 +12,32 @@ libavutil-dev \
 libswscale-dev \
 libopencv-dev
 
+git clone https://github.com/rockchip-linux/rknpu2.git
+
+cd rknpu2
+
+sudo cp runtime/Linux/librknn_api/include/rknn_api.h /usr/local/include/
+
+sudo cp runtime/Linux/librknn_api/aarch64/librknnrt.so /usr/local/lib/
+
+sudo ldconfig
+
 
 
 Build:
+
+g++ rknn_rtsp.cpp \
+-o rknn_rtsp \
+-I/usr/local/include \
+-L/usr/local/lib \
+-lrknnrt \
+-lavformat \
+-lavcodec \
+-lavutil \
+-lswscale \
+-lSDL2 \
+`pkg-config --cflags --libs opencv4` \
+-pthread
 
 g++ rknn_rtsp.cpp \
 -o rknn_rtsp \
