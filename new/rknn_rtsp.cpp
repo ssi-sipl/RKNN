@@ -210,10 +210,9 @@ av_packet_alloc();
 AVFrame* frame=
 av_frame_alloc();
 
-AVFrame* yuv=
-av_frame_alloc();
+AVFrame* bgr_frame=av_frame_alloc();
 
-uint8_t* yuv_buf=nullptr;
+uint8_t* bgr_buf=nullptr;
 
 SwsContext* sws=nullptr;
 
@@ -282,7 +281,7 @@ ctx->pix_fmt,
 video_w,
 video_h,
 
-AV_PIX_FMT_YUV420P,
+AV_PIX_FMT_BGR24,
 
 SWS_FAST_BILINEAR,
 
@@ -291,16 +290,30 @@ nullptr,
 nullptr
 );
 
-if(yuv_buf)
-av_free(
-yuv_buf
-);
-
 int sz=
 av_image_get_buffer_size(
-AV_PIX_FMT_YUV420P,
+AV_PIX_FMT_BGR24,
 video_w,
 video_h,
+1
+);
+
+bgr_buf=
+(uint8_t*)
+av_malloc(sz);
+
+av_image_fill_arrays(
+
+bgr_frame->data,
+bgr_frame->linesize,
+
+bgr_buf,
+
+AV_PIX_FMT_BGR24,
+
+video_w,
+video_h,
+
 1
 );
 
@@ -334,8 +347,8 @@ frame->linesize,
 0,
 video_h,
 
-yuv->data,
-yuv->linesize
+bgr_frame->data,
+bgr_frame->linesize
 );
 
 SDL_LockMutex(
@@ -348,7 +361,7 @@ shared_frame
 
 av_frame_ref(
 shared_frame,
-yuv
+bgr_frame
 );
 
 frame_ready=true;
@@ -367,7 +380,7 @@ infer_frame
 
 av_frame_ref(
 infer_frame,
-yuv
+bgr_frame
 );
 
 infer_ready=true;
@@ -444,44 +457,22 @@ void inference_loop(){
             continue;
         }
 
-        cv::Mat yuv(
+        cv::Mat bgr(
 
-            video_h+
-            video_h/2,
+        video_h,
+        video_w,
 
-            video_w,
+        CV_8UC3,
 
-            CV_8UC1,
+        local_frame->data[0],
 
-            local_frame->data[0]
-
+        local_frame->linesize[0]
         );
 
-        if(
-            yuv.empty()
-        ){
-
+        if(bgr.empty())
             continue;
-        }
 
-        cv::Mat bgr;
-
-        try{
-
-            cv::cvtColor(
-
-                yuv,
-
-                bgr,
-
-                cv::COLOR_YUV2BGR_I420
-
-            );
-
-        }catch(...){
-
-            continue;
-        }
+        bgr=bgr.clone();
 
         if(
             bgr.empty()
@@ -781,10 +772,8 @@ if(
 
 texture=
 SDL_CreateTexture(
-
 renderer,
-
-SDL_PIXELFORMAT_IYUV,
+SDL_PIXELFORMAT_BGR24,,
 
 SDL_TEXTUREACCESS_STREAMING,
 
@@ -794,20 +783,15 @@ video_h
 );
 }
 
-SDL_UpdateYUVTexture(
+SDL_UpdateTexture(
 
 texture,
 
 nullptr,
 
 shared_frame->data[0],
-shared_frame->linesize[0],
 
-shared_frame->data[1],
-shared_frame->linesize[1],
-
-shared_frame->data[2],
-shared_frame->linesize[2]
+shared_frame->linesize[0]
 );
 
 SDL_UnlockMutex(
