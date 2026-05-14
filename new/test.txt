@@ -28,8 +28,6 @@ Build:
 
 g++ rknn_rtsp.cpp \
 -o rknn_rtsp \
--I/usr/local/include \
--L/usr/local/lib \
 -lrknnrt \
 -lavformat \
 -lavcodec \
@@ -37,19 +35,8 @@ g++ rknn_rtsp.cpp \
 -lswscale \
 -lSDL2 \
 `pkg-config --cflags --libs opencv4` \
+-lOpenCL \
 -pthread
-
-g++ rknn_rtsp.cpp \
--o rknn_rtsp \
--lrknnrt \
--lavformat \
--lavcodec \
--lavutil \
--lswscale \
--lSDL2 \
-`pkg-config --cflags --libs opencv4` \
--pthread
-
 
 Run:
 
