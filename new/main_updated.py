@@ -278,6 +278,14 @@ def infer_loop():
             ]
         )
 
+        for i,o in enumerate(outputs):
+            print(
+                "output",
+                i,
+                o.shape,
+                o.dtype
+            )
+
         boxes,scores,cls=postprocess(
             outputs,
             infer_frame.shape,
