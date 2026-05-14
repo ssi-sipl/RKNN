@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
 import os
-os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
-os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-    "rtsp_transport;tcp|"
-    "buffer_size;1024000"
+os.environ["OPENCV_VIDEOIO_DEBUG"]="0"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"]=(
+    "rtsp_transport;tcp|buffer_size;1024000"
 )
 
 import cv2
@@ -14,65 +13,80 @@ import argparse
 import numpy as np
 from rknnlite.api import RKNNLite
 
-# -----------------------------------
+# -----------------------------
 # CLI
-# -----------------------------------
+# -----------------------------
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--rtsp", required=True)
-parser.add_argument("--conf", type=float, default=0.45)
-parser.add_argument("--iou", type=float, default=0.45)
+parser=argparse.ArgumentParser()
 
-args = parser.parse_args()
+parser.add_argument("--rtsp",required=True)
+parser.add_argument("--conf",type=float,default=.45)
+parser.add_argument("--iou",type=float,default=.45)
 
-RTSP = args.rtsp
-CONF = args.conf
-IOU = args.iou
+args=parser.parse_args()
 
-# -----------------------------------
+RTSP=args.rtsp
+CONF=args.conf
+IOU=args.iou
+
+# -----------------------------
 # CONFIG
-# -----------------------------------
+# -----------------------------
 
-MODEL = "yolov8s.rknn"
-INPUT_SIZE = 640
-CORE = RKNNLite.NPU_CORE_0
+MODEL="yolov8s.rknn"
 
-running = True
+INPUT_SIZE=640
 
-latest_frame = None
-latest_result = None
+CORE=RKNNLite.NPU_CORE_0
 
-frame_lock = threading.Lock()
-result_lock = threading.Lock()
+running=True
+
+latest_frame=None
+latest_result=None
+
+frame_lock=threading.Lock()
+result_lock=threading.Lock()
+
+# -----------------------------
+# FULL COCO
+# -----------------------------
 
 COCO_CLASSES = [
-    "person","bicycle","car","motorcycle",
-    "airplane","bus","train","truck","boat",
-    "traffic light"
+"person","bicycle","car","motorcycle","airplane","bus","train","truck","boat",
+"traffic light","fire hydrant","stop sign","parking meter","bench","bird","cat",
+"dog","horse","sheep","cow","elephant","bear","zebra","giraffe","backpack",
+"umbrella","handbag","tie","suitcase","frisbee","skis","snowboard","sports ball",
+"kite","baseball bat","baseball glove","skateboard","surfboard","tennis racket",
+"bottle","wine glass","cup","fork","knife","spoon","bowl","banana","apple",
+"sandwich","orange","broccoli","carrot","hot dog","pizza","donut","cake","chair",
+"couch","potted plant","bed","dining table","toilet","tv","laptop","mouse",
+"remote","keyboard","cell phone","microwave","oven","toaster","sink",
+"refrigerator","book","clock","vase","scissors","teddy bear","hair drier",
+"toothbrush"
 ]
 
-# -----------------------------------
+# -----------------------------
 # LETTERBOX
-# -----------------------------------
+# -----------------------------
 
 def letterbox(img):
 
-    h,w = img.shape[:2]
+    h,w=img.shape[:2]
 
-    scale = min(
+    scale=min(
         INPUT_SIZE/w,
         INPUT_SIZE/h
     )
 
-    nw = int(w*scale)
-    nh = int(h*scale)
+    nw=int(w*scale)
+    nh=int(h*scale)
 
-    resized = cv2.resize(
+    resized=cv2.resize(
         img,
         (nw,nh)
     )
 
-    canvas = np.full(
+    canvas=np.full(
         (INPUT_SIZE,INPUT_SIZE,3),
         114,
         dtype=np.uint8
@@ -88,9 +102,9 @@ def letterbox(img):
 
     return canvas,scale,(left,top)
 
-# -----------------------------------
+# -----------------------------
 # NMS
-# -----------------------------------
+# -----------------------------
 
 def nms(boxes,scores,thr):
 
@@ -140,10 +154,8 @@ def nms(boxes,scores,thr):
         )
 
         iou=inter/(
-            areas[i]+
-            areas[order[1:]]
-            -inter+
-            1e-6
+            areas[i]+areas[order[1:]]
+            -inter+1e-6
         )
 
         order=order[
@@ -154,9 +166,9 @@ def nms(boxes,scores,thr):
 
     return keep
 
-# -----------------------------------
+# -----------------------------
 # POSTPROCESS
-# -----------------------------------
+# -----------------------------
 
 def postprocess(outputs,shape,scale,pad):
 
@@ -175,6 +187,7 @@ def postprocess(outputs,shape,scale,pad):
     cls=cls[mask]
 
     if len(conf)==0:
+
         return [],[],[]
 
     boxes[:,0]=(boxes[:,0]-pad[0])/scale
@@ -200,16 +213,13 @@ def postprocess(outputs,shape,scale,pad):
         cls[keep]
     )
 
-# -----------------------------------
+# -----------------------------
 # CAPTURE
-# -----------------------------------
+# -----------------------------
 
 def capture_loop():
 
     global latest_frame
-    global running
-
-    print("[RTSP] opening")
 
     cap=cv2.VideoCapture(
         RTSP,
@@ -221,13 +231,6 @@ def capture_loop():
         3
     )
 
-    if not cap.isOpened():
-
-        print("cannot open")
-
-        running=False
-        return
-
     print("[RTSP] connected")
 
     while running:
@@ -235,8 +238,6 @@ def capture_loop():
         ret,frame=cap.read()
 
         if not ret:
-
-            print("frame failed")
 
             time.sleep(.03)
 
@@ -251,11 +252,9 @@ def capture_loop():
 
             latest_frame=frame.copy()
 
-    cap.release()
-
-# -----------------------------------
+# -----------------------------
 # INFERENCE
-# -----------------------------------
+# -----------------------------
 
 def infer_loop():
 
@@ -263,23 +262,11 @@ def infer_loop():
 
     rknn=RKNNLite()
 
-    print("loading model")
+    rknn.load_rknn(MODEL)
 
-    if rknn.load_rknn(MODEL)!=0:
-
-        print("load failed")
-
-        return
-
-    print("starting runtime")
-
-    if rknn.init_runtime(
+    rknn.init_runtime(
         core_mask=CORE
-    )!=0:
-
-        print("runtime failed")
-
-        return
+    )
 
     while running:
 
@@ -317,8 +304,6 @@ def infer_loop():
             ]
         )
 
-        time.sleep(.001)
-
         boxes,scores,cls=postprocess(
             outputs,
             frame.shape,
@@ -335,30 +320,28 @@ def infer_loop():
                 cls
             )
 
-# -----------------------------------
+# -----------------------------
 # MAIN
-# -----------------------------------
+# -----------------------------
 
 def main():
 
-    t1=threading.Thread(
+    threading.Thread(
         target=capture_loop,
         daemon=True
-    )
+    ).start()
 
-    t2=threading.Thread(
+    threading.Thread(
         target=infer_loop,
         daemon=True
-    )
-
-    t1.start()
-    t2.start()
+    ).start()
 
     prev=time.time()
 
-    while running:
+    while True:
 
         with result_lock:
+
             data=latest_result
 
         if data is None:
@@ -374,12 +357,14 @@ def main():
             cls
         ):
 
-            x1,y1,x2,y2=map(
-                int,
-                b
-            )
+            x1,y1,x2,y2=map(int,b)
 
-            label=f"{COCO_CLASSES[int(c)]} {s:.2f}"
+            cid=int(c)
+
+            if cid<len(COCO_CLASSES):
+                label=f"{COCO_CLASSES[cid]} {s:.2f}"
+            else:
+                label=f"class_{cid}"
 
             cv2.rectangle(
                 frame,
@@ -392,9 +377,9 @@ def main():
             cv2.putText(
                 frame,
                 label,
-                (x1,y1-10),
+                (x1,y1-5),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                .6,
+                .5,
                 (0,255,0),
                 2
             )
@@ -414,18 +399,15 @@ def main():
             2
         )
 
-        display=cv2.resize(
-            frame,
-            (1280,720)
-        )
-
         cv2.imshow(
-            "RKNN RTSP",
-            display
+            "RKNN",
+            cv2.resize(
+                frame,
+                (1280,720)
+            )
         )
 
         if cv2.waitKey(1)==27:
-
             break
 
     cv2.destroyAllWindows()
