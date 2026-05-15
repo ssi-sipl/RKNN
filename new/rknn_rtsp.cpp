@@ -552,9 +552,46 @@ SDL_RenderCopy(renderer,texture,nullptr,nullptr);
 
 SDL_LockMutex(det_mutex);
 SDL_SetRenderDrawColor(renderer,0,255,0,255);
+int winW,winH;
+
+SDL_GetWindowSize(
+window,
+&winW,
+&winH
+);
+
+float sx=
+(float)winW/video_w;
+
+float sy=
+(float)winH/video_h;
+
 for(auto &d:detections){
-SDL_Rect r={d.x1,d.y1,d.x2-d.x1,d.y2-d.y1};
-SDL_RenderDrawRect(renderer,&r);
+
+SDL_Rect r;
+
+r.x=
+(int)(d.x1*sx);
+
+r.y=
+(int)(d.y1*sy);
+
+r.w=
+(int)(
+(d.x2-d.x1)
+*sx
+);
+
+r.h=
+(int)(
+(d.y2-d.y1)
+*sy
+);
+
+SDL_RenderDrawRect(
+renderer,
+&r
+);
 }
 SDL_UnlockMutex(det_mutex);
 
