@@ -196,23 +196,17 @@ if(infer_bgr.empty()){
 
 cv::Mat frame=infer_bgr.clone();
 infer_ready=false;
-
 SDL_UnlockMutex(infer_mutex);
 
-float scale=
-std::min(
+float scale=std::min(
 640.0f/video_w,
 640.0f/video_h
 );
 
-int nw=
-(int)(video_w*scale);
-
-int nh=
-(int)(video_h*scale);
+int nw=video_w*scale;
+int nh=video_h*scale;
 
 cv::Mat resized;
-
 cv::resize(
 frame,
 resized,
@@ -227,28 +221,19 @@ cv::Scalar(
 114,
 114,
 114
-)
-);
+));
 
-int padx=
-(640-nw)/2;
-
-int pady=
-(640-nh)/2;
+int left=(640-nw)/2;
+int top=(640-nh)/2;
 
 resized.copyTo(
-
 input(
 cv::Rect(
-padx,
-pady,
+left,
+top,
 nw,
 nh
-)
-
-)
-
-);
+)));
 
 rknn_input inputs[1];
 memset(inputs,0,sizeof(inputs));
@@ -287,46 +272,16 @@ for(int i=0;i<8400;i++){
 
  if(best<0.45) continue;
 
+ x=(x-left)/scale;
+ y=(y-top)/scale;
+ w/=scale;
+ h/=scale;
+
  Detection d;
-float x1=
-(x-w/2-padx)
-/scale;
-
-float y1=
-(y-h/2-pady)
-/scale;
-
-float x2=
-(x+w/2-padx)
-/scale;
-
-float y2=
-(y+h/2-pady)
-/scale;
-
-d.x1=
-std::max(
-0,
-(int)x1
-);
-
-d.y1=
-std::max(
-0,
-(int)y1
-);
-
-d.x2=
-std::min(
-video_w,
-(int)x2
-);
-
-d.y2=
-std::min(
-video_h,
-(int)y2
-);
+ d.x1=x-w/2;
+ d.y1=y-h/2;
+ d.x2=x+w/2;
+ d.y2=y+h/2;
  d.score=best;
  d.cls=cls;
  local.push_back(d);
@@ -335,6 +290,7 @@ video_h,
 SDL_LockMutex(det_mutex);
 detections=local;
 SDL_UnlockMutex(det_mutex);
+
 rknn_outputs_release(rknn_ctx,1,outputs);
 }
 }
