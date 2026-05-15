@@ -180,196 +180,306 @@ goto RECONNECT;
 }
 
 void inference_loop(){
+
 while(running){
 
-if(!infer_ready){
- sleep_ms(1);
- continue;
-}
-
-SDL_LockMutex(infer_mutex);
-
-if(infer_bgr.empty()){
- SDL_UnlockMutex(infer_mutex);
- continue;
-}
-
-cv::Mat frame=infer_bgr.clone();
-infer_ready=false;
-SDL_UnlockMutex(infer_mutex);
-
-float scale=std::min(
-640.0f/video_w,
-640.0f/video_h
-);
-
-int nw=video_w*scale;
-int nh=video_h*scale;
-
-cv::Mat resized;
-cv::resize(
-frame,
-resized,
-cv::Size(nw,nh)
-);
-
-cv::Mat input(
-640,
-640,
-CV_8UC3,
-cv::Scalar(
-114,
-114,
-114
-));
-
-int left=(640-nw)/2;
-int top=(640-nh)/2;
-
-resized.copyTo(
-input(
-cv::Rect(
-left,
-top,
-nw,
-nh
-)));
-
-rknn_input inputs[1];
-memset(inputs,0,sizeof(inputs));
-
-inputs[0].index=0;
-inputs[0].type=RKNN_TENSOR_UINT8;
-inputs[0].fmt=RKNN_TENSOR_NHWC;
-inputs[0].size=640*640*3;
-inputs[0].buf=input.data;
-
-if(rknn_inputs_set(rknn_ctx,1,inputs)<0) continue;
-if(rknn_run(rknn_ctx,nullptr)<0) continue;
-
-rknn_output outputs[1];
-memset(outputs,0,sizeof(outputs));
-outputs[0].want_float=1;
-
-if(rknn_outputs_get(rknn_ctx,1,outputs,nullptr)<0) continue;
-
-float* out=(float*)outputs[0].buf;
-
-std::vector<Detection> local;
-
-for(int i=0;i<8400;i++)
-{
-    // CHANNEL-FIRST ACCESS
-
-    float x=out[0*8400+i];
-    float y=out[1*8400+i];
-    float w=out[2*8400+i];
-    float h=out[3*8400+i];
-
-    float best=0.0f;
-    int cls=-1;
-
-    for(int c=0;c<80;c++)
-    {
-        float score=
-        out[(c+4)*8400+i];
-
-        if(score>best)
-        {
-            best=score;
-            cls=c;
-        }
+    if(!infer_ready){
+        sleep_ms(1);
+        continue;
     }
 
-    // much higher threshold
-    if(best<0.70f)
+    SDL_LockMutex(infer_mutex);
+
+    if(infer_bgr.empty()){
+        SDL_UnlockMutex(infer_mutex);
         continue;
+    }
 
-    // undo letterbox
-    x=(x-left)/scale;
-    y=(y-top)/scale;
+    cv::Mat frame=infer_bgr.clone();
 
-    w/=scale;
-    h/=scale;
+    infer_ready=false;
 
-    Detection d;
+    SDL_UnlockMutex(infer_mutex);
 
-    d.x1=(int)(x-w/2);
-    d.y1=(int)(y-h/2);
+    //---------------------------------
+    // MATCH PYTHON EXACTLY
+    //---------------------------------
 
-    d.x2=(int)(x+w/2);
-    d.y2=(int)(y+h/2);
+    cv::Mat infer_frame;
 
-    // clamp
-    d.x1=std::max(0,d.x1);
-    d.y1=std::max(0,d.y1);
-
-    d.x2=std::min(video_w-1,d.x2);
-    d.y2=std::min(video_h-1,d.y2);
-
-    // reject nonsense boxes
-    int bw=d.x2-d.x1;
-    int bh=d.y2-d.y1;
-
-    if(
-        bw<10 ||
-        bh<10 ||
-        bw>video_w*0.8 ||
-        bh>video_h*0.8
-    )
-        continue;
-
-    d.score=best;
-    d.cls=cls;
-
-    local.push_back(d);
-}
-
-std::vector<int> idxs;
-
-std::vector<cv::Rect> boxes;
-std::vector<float> scores;
-
-for(auto& d:local)
-{
-    boxes.push_back(
-        cv::Rect(
-            d.x1,
-            d.y1,
-            d.x2-d.x1,
-            d.y2-d.y1
+    cv::resize(
+        frame,
+        infer_frame,
+        cv::Size(
+            960,
+            540
         )
     );
 
-    scores.push_back(
+    float scale=
+    std::min(
+        640.0f/960.0f,
+        640.0f/540.0f
+    );
+
+    int nw=
+    int(960*scale);
+
+    int nh=
+    int(540*scale);
+
+    cv::Mat resized;
+
+    cv::resize(
+        infer_frame,
+        resized,
+        cv::Size(
+            nw,
+            nh
+        )
+    );
+
+    cv::Mat input(
+        640,
+        640,
+        CV_8UC3,
+        cv::Scalar(
+            114,
+            114,
+            114
+        )
+    );
+
+    int left=
+    (640-nw)/2;
+
+    int top=
+    (640-nh)/2;
+
+    resized.copyTo(
+        input(
+            cv::Rect(
+                left,
+                top,
+                nw,
+                nh
+            )
+        )
+    );
+
+    //---------------------------------
+    // RKNN
+    //---------------------------------
+
+    rknn_input inputs[1];
+
+    memset(
+        inputs,
+        0,
+        sizeof(inputs)
+    );
+
+    inputs[0].index=0;
+    inputs[0].type=RKNN_TENSOR_UINT8;
+    inputs[0].fmt=RKNN_TENSOR_NHWC;
+    inputs[0].size=640*640*3;
+    inputs[0].buf=input.data;
+
+    if(
+        rknn_inputs_set(
+            rknn_ctx,
+            1,
+            inputs
+        )<0
+    ) continue;
+
+    if(
+        rknn_run(
+            rknn_ctx,
+            nullptr
+        )<0
+    ) continue;
+
+    rknn_output outputs[1];
+
+    memset(
+        outputs,
+        0,
+        sizeof(outputs)
+    );
+
+    outputs[0].want_float=1;
+
+    if(
+        rknn_outputs_get(
+            rknn_ctx,
+            1,
+            outputs,
+            nullptr
+        )<0
+    ) continue;
+
+    float* out=
+    (float*)outputs[0].buf;
+
+    std::vector<Detection> local;
+
+    for(int i=0;i<8400;i++)
+    {
+        float x=
+        out[0*8400+i];
+
+        float y=
+        out[1*8400+i];
+
+        float w=
+        out[2*8400+i];
+
+        float h=
+        out[3*8400+i];
+
+        float best=0;
+
+        int cls=-1;
+
+        for(int c=0;c<80;c++)
+        {
+            float s=
+            out[(c+4)*8400+i];
+
+            if(s>best)
+            {
+                best=s;
+                cls=c;
+            }
+        }
+
+        if(best<0.7)
+            continue;
+
+        //---------------------
+        // undo letterbox
+        //---------------------
+
+        x=(x-left)/scale;
+        y=(y-top)/scale;
+
+        w/=scale;
+        h/=scale;
+
+        float x1=
+        x-w/2;
+
+        float y1=
+        y-h/2;
+
+        float x2=
+        x+w/2;
+
+        float y2=
+        y+h/2;
+
+        //---------------------
+        // match python
+        //---------------------
+
+        float sx=
+        frame.cols/960.0f;
+
+        float sy=
+        frame.rows/540.0f;
+
+        x1*=sx;
+        y1*=sy;
+
+        x2*=sx;
+        y2*=sy;
+
+        Detection d;
+
+        d.x1=
+        std::max(
+        0,
+        int(x1)
+        );
+
+        d.y1=
+        std::max(
+        0,
+        int(y1)
+        );
+
+        d.x2=
+        std::min(
+        video_w-1,
+        int(x2)
+        );
+
+        d.y2=
+        std::min(
+        video_h-1,
+        int(y2)
+        );
+
+        if(
+        d.x2-d.x1<15 ||
+        d.y2-d.y1<15
+        )
+        continue;
+
+        d.score=best;
+        d.cls=cls;
+
+        local.push_back(d);
+    }
+
+    std::vector<cv::Rect> boxes;
+    std::vector<float> scores;
+
+    for(auto& d:local)
+    {
+        boxes.push_back(
+        cv::Rect(
+        d.x1,
+        d.y1,
+        d.x2-d.x1,
+        d.y2-d.y1
+        ));
+
+        scores.push_back(
         d.score
+        );
+    }
+
+    std::vector<int> idx;
+
+    cv::dnn::NMSBoxes(
+        boxes,
+        scores,
+        .7,
+        .45,
+        idx
     );
-}
 
-cv::dnn::NMSBoxes(
-    boxes,
-    scores,
-    0.7,
-    0.45,
-    idxs
-);
+    std::vector<Detection> final_det;
 
-std::vector<Detection> filtered;
-
-for(int i:idxs)
-{
-    filtered.push_back(
+    for(int i:idx)
+        final_det.push_back(
         local[i]
+        );
+
+    SDL_LockMutex(det_mutex);
+
+    detections=
+    final_det;
+
+    SDL_UnlockMutex(det_mutex);
+
+    rknn_outputs_release(
+        rknn_ctx,
+        1,
+        outputs
     );
-}
-
-local=filtered;
-
-SDL_LockMutex(det_mutex);
-detections=local;
-SDL_UnlockMutex(det_mutex);
-
-rknn_outputs_release(rknn_ctx,1,outputs);
 }
 }
 
