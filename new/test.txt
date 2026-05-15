@@ -34,6 +34,12 @@ sudo ldconfig
 
 Build:
 
+g++ rknn_rtsp.cpp -o rknn_rtsp \
+-lrknnrt -lavformat -lavcodec \
+-lavutil -lswscale -lSDL2 \
+`pkg-config --cflags --libs opencv4` \
+-lOpenCL -pthread
+
 g++ rknn_rtsp.cpp \
 -o rknn_rtsp \
 -lrknnrt \

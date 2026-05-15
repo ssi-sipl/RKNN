@@ -338,6 +338,30 @@ while(running){
         float h=
         out[3*8400+i];
 
+        float debugBest=0;
+
+        for(int c=0;c<80;c++)
+        {
+            float s=
+            out[(c+4)*8400+i];
+
+            if(s>debugBest)
+                debugBest=s;
+        }
+
+        if(i<5)
+        {
+            std::cout
+            << "\n==== CPP DEBUG ====\n"
+            << i
+            << " x=" << x
+            << " y=" << y
+            << " w=" << w
+            << " h=" << h
+            << " score=" << debugBest
+            << std::endl;
+        }
+
         float best=0;
 
         int cls=-1;

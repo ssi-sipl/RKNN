@@ -278,6 +278,27 @@ def infer_loop():
             ]
         )
 
+        pred = outputs[0][0].T
+
+        print("\n==== PYTHON DEBUG ====")
+
+        for i in range(5):
+            x=pred[i][0]
+            y=pred[i][1]
+            w=pred[i][2]
+            h=pred[i][3]
+
+            score=pred[i][4:].max()
+
+            print(
+                i,
+                "x=",x,
+                "y=",y,
+                "w=",w,
+                "h=",h,
+                "score=",score
+            )
+
         for i,o in enumerate(outputs):
             print(
                 "output",
