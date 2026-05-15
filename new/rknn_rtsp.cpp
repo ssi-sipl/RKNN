@@ -4,7 +4,7 @@
 #include <iostream>
 #include <chrono>
 #include <cstring>
-
+#include <opencv2/dnn.hpp>
 #include "rknn_api.h"
 #include <opencv2/opencv.hpp>
 
@@ -259,31 +259,33 @@ std::vector<Detection> local;
 
 for(int i=0;i<8400;i++)
 {
-    // transpose access equivalent to:
-    // pred = outputs[0][0].T
+    // CHANNEL-FIRST ACCESS
 
-    float x=out[i*84 + 0];
-    float y=out[i*84 + 1];
-    float w=out[i*84 + 2];
-    float h=out[i*84 + 3];
+    float x=out[0*8400+i];
+    float y=out[1*8400+i];
+    float w=out[2*8400+i];
+    float h=out[3*8400+i];
 
-    float best=0;
+    float best=0.0f;
     int cls=-1;
 
     for(int c=0;c<80;c++)
     {
-        float s=out[i*84 + c + 4];
+        float score=
+        out[(c+4)*8400+i];
 
-        if(s>best)
+        if(score>best)
         {
-            best=s;
+            best=score;
             cls=c;
         }
     }
 
-    if(best<0.45)
+    // much higher threshold
+    if(best<0.70f)
         continue;
 
+    // undo letterbox
     x=(x-left)/scale;
     y=(y-top)/scale;
 
@@ -292,23 +294,76 @@ for(int i=0;i<8400;i++)
 
     Detection d;
 
-    d.x1=x-w/2;
-    d.y1=y-h/2;
-    d.x2=x+w/2;
-    d.y2=y+h/2;
+    d.x1=(int)(x-w/2);
+    d.y1=(int)(y-h/2);
+
+    d.x2=(int)(x+w/2);
+    d.y2=(int)(y+h/2);
 
     // clamp
     d.x1=std::max(0,d.x1);
     d.y1=std::max(0,d.y1);
 
-    d.x2=std::min(video_w,d.x2);
-    d.y2=std::min(video_h,d.y2);
+    d.x2=std::min(video_w-1,d.x2);
+    d.y2=std::min(video_h-1,d.y2);
+
+    // reject nonsense boxes
+    int bw=d.x2-d.x1;
+    int bh=d.y2-d.y1;
+
+    if(
+        bw<10 ||
+        bh<10 ||
+        bw>video_w*0.8 ||
+        bh>video_h*0.8
+    )
+        continue;
 
     d.score=best;
     d.cls=cls;
 
     local.push_back(d);
 }
+
+std::vector<int> idxs;
+
+std::vector<cv::Rect> boxes;
+std::vector<float> scores;
+
+for(auto& d:local)
+{
+    boxes.push_back(
+        cv::Rect(
+            d.x1,
+            d.y1,
+            d.x2-d.x1,
+            d.y2-d.y1
+        )
+    );
+
+    scores.push_back(
+        d.score
+    );
+}
+
+cv::dnn::NMSBoxes(
+    boxes,
+    scores,
+    0.7,
+    0.45,
+    idxs
+);
+
+std::vector<Detection> filtered;
+
+for(int i:idxs)
+{
+    filtered.push_back(
+        local[i]
+    );
+}
+
+local=filtered;
 
 SDL_LockMutex(det_mutex);
 detections=local;
