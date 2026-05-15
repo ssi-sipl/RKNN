@@ -254,37 +254,60 @@ outputs[0].want_float=1;
 if(rknn_outputs_get(rknn_ctx,1,outputs,nullptr)<0) continue;
 
 float* out=(float*)outputs[0].buf;
+
 std::vector<Detection> local;
 
-for(int i=0;i<8400;i++){
- float x=out[i];
- float y=out[8400+i];
- float w=out[16800+i];
- float h=out[25200+i];
+for(int i=0;i<8400;i++)
+{
+    // transpose access equivalent to:
+    // pred = outputs[0][0].T
 
- float best=0;
- int cls=-1;
+    float x=out[i*84 + 0];
+    float y=out[i*84 + 1];
+    float w=out[i*84 + 2];
+    float h=out[i*84 + 3];
 
- for(int c=4;c<84;c++){
-   float s=out[c*8400+i];
-   if(s>best){best=s;cls=c-4;}
- }
+    float best=0;
+    int cls=-1;
 
- if(best<0.45) continue;
+    for(int c=0;c<80;c++)
+    {
+        float s=out[i*84 + c + 4];
 
- x=(x-left)/scale;
- y=(y-top)/scale;
- w/=scale;
- h/=scale;
+        if(s>best)
+        {
+            best=s;
+            cls=c;
+        }
+    }
 
- Detection d;
- d.x1=x-w/2;
- d.y1=y-h/2;
- d.x2=x+w/2;
- d.y2=y+h/2;
- d.score=best;
- d.cls=cls;
- local.push_back(d);
+    if(best<0.45)
+        continue;
+
+    x=(x-left)/scale;
+    y=(y-top)/scale;
+
+    w/=scale;
+    h/=scale;
+
+    Detection d;
+
+    d.x1=x-w/2;
+    d.y1=y-h/2;
+    d.x2=x+w/2;
+    d.y2=y+h/2;
+
+    // clamp
+    d.x1=std::max(0,d.x1);
+    d.y1=std::max(0,d.y1);
+
+    d.x2=std::min(video_w,d.x2);
+    d.y2=std::min(video_h,d.y2);
+
+    d.score=best;
+    d.cls=cls;
+
+    local.push_back(d);
 }
 
 SDL_LockMutex(det_mutex);
