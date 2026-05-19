@@ -15,6 +15,10 @@ libopencv-dev
 sudo apt update
 sudo apt install ocl-icd-opencl-dev opencl-headers
 
+sudo apt install ocl-icd-opencl-dev opencl-headers
+
+sudo apt install ocl-icd-opencl-dev opencl-headers
+
 sudo apt install libsdl2-ttf-dev
 
 You can verify:
@@ -73,14 +77,15 @@ rknn_rtsp:
 
 Compilng the server:
 
-g++ server/rknn_server.cpp \
--o server/rknn_server \
+g++ rknn_server.cpp \
+-o rknn_server \
 -lrknnrt \
 `pkg-config --cflags --libs opencv4` \
+-lOpenCL \
 -pthread
 
-g++ server/rknn_rtsp.cpp \
--o server/rknn_rtsp \
+g++ rknn_rtsp.cpp \
+-o rknn_rtsp \
 -lavformat \
 -lavcodec \
 -lavutil \
@@ -88,6 +93,7 @@ g++ server/rknn_rtsp.cpp \
 -lSDL2 \
 -lSDL2_ttf \
 `pkg-config --cflags --libs opencv4` \
+-lOpenCL \
 -pthread
 
 
