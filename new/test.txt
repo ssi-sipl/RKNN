@@ -96,7 +96,6 @@ g++ rknn_rtsp.cpp \
 -lOpenCL \
 -pthread
 
-
 Running the Server:
 ./rknn_server ../yolov8s.rknn ../classes.txt 0.7
 
