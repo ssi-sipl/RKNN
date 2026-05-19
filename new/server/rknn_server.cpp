@@ -3,6 +3,7 @@
 #include <vector>
 #include <fstream>
 #include <cstring>
+#include <mutex>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/dnn.hpp>
@@ -21,6 +22,8 @@ struct Detection{
 };
 
 rknn_context ctx=0;
+
+std::mutex rknn_mutex;
 
 std::vector<std::string> classes;
 
@@ -126,15 +129,15 @@ while(true){
     if(frame.empty())
         continue;
 
-    //--------------------------------
-    // exact python preprocessing
-    //--------------------------------
-
     int orig_w=
     frame.cols;
 
     int orig_h=
     frame.rows;
+
+    //-----------------------------------------
+    // exact preprocessing from working code
+    //-----------------------------------------
 
     float scale=
     std::min(
@@ -188,9 +191,19 @@ while(true){
         )
     );
 
-    //--------------------------------
-    // RKNN
-    //--------------------------------
+    //-----------------------------------------
+    // thread-safe NPU access
+    //-----------------------------------------
+
+    rknn_output outputs[1];
+
+    memset(
+        outputs,
+        0,
+        sizeof(outputs)
+    );
+
+    outputs[0].want_float=1;
 
     rknn_input inputs[1];
 
@@ -214,31 +227,32 @@ while(true){
     inputs[0].buf=
     input.data;
 
+    rknn_mutex.lock();
+
     if(
         rknn_inputs_set(
         ctx,
         1,
         inputs
         )<0
-    ) continue;
+    ){
+
+        rknn_mutex.unlock();
+
+        continue;
+    }
 
     if(
         rknn_run(
         ctx,
         nullptr
         )<0
-    ) continue;
+    ){
 
-    rknn_output outputs[1];
+        rknn_mutex.unlock();
 
-    memset(
-        outputs,
-        0,
-        sizeof(outputs)
-    );
-
-    outputs[0]
-    .want_float=1;
+        continue;
+    }
 
     if(
         rknn_outputs_get(
@@ -247,7 +261,12 @@ while(true){
         outputs,
         nullptr
         )<0
-    ) continue;
+    ){
+
+        rknn_mutex.unlock();
+
+        continue;
+    }
 
     float* pred=
     (float*)
@@ -298,14 +317,8 @@ while(true){
             }
         }
 
-        if(
-        best<conf
-        )
+        if(best<conf)
         continue;
-
-        //--------------------------------
-        // undo letterbox
-        //--------------------------------
 
         x=
         (x-left)
@@ -315,41 +328,35 @@ while(true){
         (y-top)
         /scale;
 
-        w/=
-        scale;
+        w/=scale;
 
-        h/=
-        scale;
+        h/=scale;
 
         Detection d;
 
         d.x1=
         std::max(
         0,
-        int(
-        x-w/2
-        ));
+        int(x-w/2)
+        );
 
         d.y1=
         std::max(
         0,
-        int(
-        y-h/2
-        ));
+        int(y-h/2)
+        );
 
         d.x2=
         std::min(
         orig_w-1,
-        int(
-        x+w/2
-        ));
+        int(x+w/2)
+        );
 
         d.y2=
         std::min(
         orig_h-1,
-        int(
-        y+h/2
-        ));
+        int(y+h/2)
+        );
 
         if(
         d.x2-d.x1<15
@@ -358,11 +365,9 @@ while(true){
         )
         continue;
 
-        d.score=
-        best;
+        d.score=best;
 
-        d.cls=
-        cls;
+        d.cls=cls;
 
         memset(
         d.label,
@@ -378,10 +383,6 @@ while(true){
 
         local.push_back(d);
     }
-
-    //--------------------------------
-    // NMS
-    //--------------------------------
 
     std::vector<cv::Rect>
     boxes;
@@ -412,15 +413,10 @@ while(true){
     idx;
 
     cv::dnn::NMSBoxes(
-
         boxes,
-
         scores,
-
         conf,
-
         .45,
-
         idx
     );
 
@@ -436,6 +432,14 @@ while(true){
         );
     }
 
+    rknn_outputs_release(
+        ctx,
+        1,
+        outputs
+    );
+
+    rknn_mutex.unlock();
+
     int n=
     final_det.size();
 
@@ -448,19 +452,13 @@ while(true){
 
     if(n>0){
 
-    send(
-        client,
-        final_det.data(),
-        n*sizeof(Detection),
-        0
-    );
+        send(
+            client,
+            final_det.data(),
+            n*sizeof(Detection),
+            0
+        );
     }
-
-    rknn_outputs_release(
-        ctx,
-        1,
-        outputs
-    );
 }
 
 close(client);
@@ -521,7 +519,7 @@ sizeof(addr)
 
 listen(
 server,
-10
+20
 );
 
 std::cout
