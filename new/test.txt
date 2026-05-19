@@ -71,3 +71,18 @@ rknn_rtsp:
 ./rknn_rtsp "rtsp://..."
 
 
+Compilng the server:
+
+g++ server/rknn_server.cpp \
+-o server/rknn_server \
+-lrknnrt \
+`pkg-config --cflags --libs opencv4` \
+-pthread
+
+
+Running the Server:
+./rknn_server yolov8s.rknn classes.txt 0.7
+
+./rknn_rtsp rtsp://cam1
+./rknn_rtsp rtsp://cam2
+./rknn_rtsp rtsp://cam3
