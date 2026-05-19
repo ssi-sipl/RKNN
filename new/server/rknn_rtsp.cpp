@@ -2,7 +2,6 @@
 #include <thread>
 #include <vector>
 #include <iostream>
-#include <fstream>
 #include <chrono>
 #include <cstring>
 
@@ -26,103 +25,70 @@ struct Detection{
     int x1,y1,x2,y2;
     float score;
     int cls;
+    char label[64];
 };
-
-std::vector<std::string> CLASS_NAMES;
 
 static std::atomic<bool> running(true);
 static std::atomic<bool> frame_ready(false);
 static std::atomic<bool> infer_ready(false);
 
-static SDL_mutex* frame_mutex=nullptr;
-static SDL_mutex* infer_mutex=nullptr;
-static SDL_mutex* det_mutex=nullptr;
+SDL_mutex* frame_mutex=nullptr;
+SDL_mutex* infer_mutex=nullptr;
+SDL_mutex* det_mutex=nullptr;
 
-static cv::Mat shared_bgr;
-static cv::Mat infer_bgr;
+cv::Mat shared_bgr;
+cv::Mat infer_bgr;
 
-static std::vector<Detection> detections;
+std::vector<Detection> detections;
 
-static int video_w=0;
-static int video_h=0;
+int video_w=0;
+int video_h=0;
 
 int sockfd=-1;
 
 void sleep_ms(int ms){
-
-std::this_thread::sleep_for(
-std::chrono::milliseconds(ms)
-);
-}
-
-void load_classes(
-const char* file
-){
-
-std::ifstream f(file);
-
-std::string line;
-
-while(
-std::getline(
-f,
-line
-)
-){
-
-if(!line.empty())
-CLASS_NAMES.push_back(
-line
-);
-}
+    std::this_thread::sleep_for(
+        std::chrono::milliseconds(ms)
+    );
 }
 
 void connect_server(){
 
-sockfd=
-socket(
-AF_INET,
-SOCK_STREAM,
-0
-);
+    sockfd=socket(
+        AF_INET,
+        SOCK_STREAM,
+        0
+    );
 
-sockaddr_in server;
+    sockaddr_in server;
 
-server.sin_family=
-AF_INET;
+    server.sin_family=AF_INET;
+    server.sin_port=htons(9000);
 
-server.sin_port=
-htons(
-9000
-);
+    inet_pton(
+        AF_INET,
+        "127.0.0.1",
+        &server.sin_addr
+    );
 
-inet_pton(
-AF_INET,
-"127.0.0.1",
-&server.sin_addr
-);
+    while(
+        connect(
+            sockfd,
+            (sockaddr*)&server,
+            sizeof(server)
+        )<0
+    ){
+        std::cout
+        <<"waiting server...\n";
 
-while(
-connect(
-sockfd,
-(sockaddr*)&server,
-sizeof(server)
-)<0
-){
+        sleep_ms(1000);
+    }
 
-std::cout
-<<"waiting server...\n";
-
-sleep_ms(1000);
+    std::cout
+    <<"connected\n";
 }
 
-std::cout
-<<"server connected\n";
-}
-
-void decoder_loop(
-const char* url
-){
+void decoder_loop(const char* url){
 
 avformat_network_init();
 
@@ -154,9 +120,7 @@ nullptr,
 &opts
 )<0
 ){
-
 sleep_ms(1000);
-
 goto RECONNECT;
 }
 
@@ -180,9 +144,7 @@ fmt->streams[i]
 ==
 AVMEDIA_TYPE_VIDEO
 ){
-
 vs=i;
-
 break;
 }
 }
@@ -233,17 +195,13 @@ av_read_frame(
 fmt,
 pkt
 )<0
-)
-break;
+) break;
 
 if(
-pkt->stream_index
-!=vs
+pkt->stream_index!=vs
 ){
 
-av_packet_unref(
-pkt
-);
+av_packet_unref(pkt);
 
 continue;
 }
@@ -268,137 +226,84 @@ frame->width!=video_w
 frame->height!=video_h
 ){
 
-video_w=
-frame->width;
-
-video_h=
-frame->height;
-
-if(sws)
-sws_freeContext(
-sws
-);
+video_w=frame->width;
+video_h=frame->height;
 
 sws=
 sws_getContext(
-
 video_w,
 video_h,
-
 ctx->pix_fmt,
-
 video_w,
 video_h,
-
 AV_PIX_FMT_RGB24,
-
 SWS_FAST_BILINEAR,
-
-nullptr,
-nullptr,
-nullptr
+0,0,0
 );
 
 int size=
 av_image_get_buffer_size(
-
 AV_PIX_FMT_RGB24,
-
 video_w,
 video_h,
-
 1
-);
-
-if(bgr_buf)
-av_free(
-bgr_buf
 );
 
 bgr_buf=
 (uint8_t*)
-av_malloc(
-size
-);
+av_malloc(size);
 
 av_image_fill_arrays(
-
 bgr->data,
 bgr->linesize,
-
 bgr_buf,
-
 AV_PIX_FMT_RGB24,
-
 video_w,
 video_h,
-
 1
 );
 }
 
 sws_scale(
-
 sws,
-
 frame->data,
 frame->linesize,
-
 0,
-
 video_h,
-
 bgr->data,
 bgr->linesize
 );
 
 cv::Mat img(
-
 video_h,
-
 video_w,
-
 CV_8UC3,
-
-bgr->data[0],
-
-bgr->linesize[0]
+bgr->data[0]
 );
 
 cv::Mat copy=
 img.clone();
 
-SDL_LockMutex(
-frame_mutex
-);
+SDL_LockMutex(frame_mutex);
 
-shared_bgr=
-copy;
+shared_bgr=copy;
 
 frame_ready=true;
 
-SDL_UnlockMutex(
-frame_mutex
-);
+SDL_UnlockMutex(frame_mutex);
 
-SDL_LockMutex(
-infer_mutex
-);
+SDL_LockMutex(infer_mutex);
 
-infer_bgr=
-copy;
+infer_bgr=copy;
 
 infer_ready=true;
 
-SDL_UnlockMutex(
-infer_mutex
-);
+SDL_UnlockMutex(infer_mutex);
+
 }
 }
 
-av_packet_unref(
-pkt
-);
+av_packet_unref(pkt);
 }
 
 goto RECONNECT;
@@ -408,43 +313,23 @@ void client_inference_loop(){
 
 while(running){
 
-if(
-!infer_ready
-){
+if(!infer_ready){
 
-sleep_ms(
-1
-);
+sleep_ms(1);
 
 continue;
 }
 
-SDL_LockMutex(
-infer_mutex
-);
-
-if(
-infer_bgr.empty()
-){
-
-SDL_UnlockMutex(
-infer_mutex
-);
-
-continue;
-}
+SDL_LockMutex(infer_mutex);
 
 cv::Mat frame=
 infer_bgr.clone();
 
 infer_ready=false;
 
-SDL_UnlockMutex(
-infer_mutex
-);
+SDL_UnlockMutex(infer_mutex);
 
-std::vector<uchar>
-buf;
+std::vector<uchar> buf;
 
 cv::imencode(
 ".jpg",
@@ -452,8 +337,7 @@ frame,
 buf
 );
 
-int sz=
-buf.size();
+int sz=buf.size();
 
 send(
 sockfd,
@@ -471,30 +355,20 @@ sz,
 
 int n;
 
-if(
 recv(
 sockfd,
 &n,
 sizeof(int),
 MSG_WAITALL
-)<=0
-){
-
-continue;
-}
-
-std::vector<
-Detection
-> det(
-n
 );
+
+std::vector<Detection>
+det(n);
 
 recv(
 sockfd,
 det.data(),
-n*sizeof(
-Detection
-),
+n*sizeof(Detection),
 MSG_WAITALL
 );
 
@@ -502,8 +376,7 @@ SDL_LockMutex(
 det_mutex
 );
 
-detections=
-det;
+detections=det;
 
 SDL_UnlockMutex(
 det_mutex
@@ -511,23 +384,15 @@ det_mutex
 }
 }
 
-int main(
-int argc,
-char* argv[]
-){
+int main(int argc,char* argv[]){
 
-if(argc<3){
+if(argc<2){
 
 std::cout
-<<"Usage:\n"
-<<"./rknn_rtsp rtsp classes.txt\n";
+<<"./rknn_rtsp rtsp_url\n";
 
 return -1;
 }
-
-load_classes(
-argv[2]
-);
 
 connect_server();
 
@@ -580,22 +445,13 @@ SDL_RENDERER_ACCELERATED
 
 SDL_Texture* texture=nullptr;
 
-SDL_Event e;
-
 while(running){
 
-while(
-SDL_PollEvent(
-&e
-))
-{
+SDL_Event e;
 
-if(
-e.type==
-SDL_QUIT
-)
+while(SDL_PollEvent(&e))
+if(e.type==SDL_QUIT)
 running=false;
-}
 
 if(frame_ready){
 
@@ -603,37 +459,22 @@ SDL_LockMutex(
 frame_mutex
 );
 
-if(
-!shared_bgr.empty()
-){
-
-if(
-!texture
-){
+if(!texture){
 
 texture=
 SDL_CreateTexture(
-
 renderer,
-
 SDL_PIXELFORMAT_RGB24,
-
 SDL_TEXTUREACCESS_STREAMING,
-
 shared_bgr.cols,
-
 shared_bgr.rows
 );
 }
 
 SDL_UpdateTexture(
-
 texture,
-
-nullptr,
-
+0,
 shared_bgr.data,
-
 shared_bgr.step
 );
 
@@ -644,8 +485,8 @@ renderer
 SDL_RenderCopy(
 renderer,
 texture,
-nullptr,
-nullptr
+0,
+0
 );
 
 int winW,winH;
@@ -657,23 +498,13 @@ window,
 );
 
 float sx=
-(float)
-winW/video_w;
+(float)winW/video_w;
 
 float sy=
-(float)
-winH/video_h;
+(float)winH/video_h;
 
 SDL_LockMutex(
 det_mutex
-);
-
-SDL_SetRenderDrawColor(
-renderer,
-0,
-255,
-0,
-255
 );
 
 for(auto& d:detections){
@@ -683,45 +514,35 @@ SDL_Rect r;
 r.x=d.x1*sx;
 r.y=d.y1*sy;
 
-r.w=
-(d.x2-d.x1)*sx;
+r.w=(d.x2-d.x1)*sx;
+r.h=(d.y2-d.y1)*sy;
 
-r.h=
-(d.y2-d.y1)*sy;
+SDL_SetRenderDrawColor(
+renderer,
+0,
+255,
+0,
+255
+);
 
 SDL_RenderDrawRect(
 renderer,
 &r
 );
 
-if(
-d.cls>=0
-&&
-d.cls<
-CLASS_NAMES.size()
-){
-
-std::string txt=
-CLASS_NAMES[d.cls]
+std::string text=
+std::string(d.label)
 +" "
-+
-std::to_string(
++std::to_string(
 d.score
-).substr(
-0,
-4
-);
+).substr(0,4);
 
-SDL_Color c={
-0,
-255,
-0
-};
+SDL_Color c={0,255,0};
 
 SDL_Surface* s=
 TTF_RenderText_Blended(
 font,
-txt.c_str(),
+text.c_str(),
 c
 );
 
@@ -741,18 +562,13 @@ s->h
 SDL_RenderCopy(
 renderer,
 t,
-NULL,
+0,
 &tr
 );
 
-SDL_FreeSurface(
-s
-);
+SDL_FreeSurface(s);
 
-SDL_DestroyTexture(
-t
-);
-}
+SDL_DestroyTexture(t);
 }
 
 SDL_UnlockMutex(
@@ -762,7 +578,6 @@ det_mutex
 SDL_RenderPresent(
 renderer
 );
-}
 
 frame_ready=false;
 
@@ -771,14 +586,9 @@ frame_mutex
 );
 }
 
-SDL_Delay(
-1
-);
+SDL_Delay(1);
 }
 
-close(
-sockfd
-);
+close(sockfd);
 
-return 0;
 }
