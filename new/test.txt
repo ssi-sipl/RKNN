@@ -79,9 +79,20 @@ g++ server/rknn_server.cpp \
 `pkg-config --cflags --libs opencv4` \
 -pthread
 
+g++ server/rknn_rtsp.cpp \
+-o server/rknn_rtsp \
+-lavformat \
+-lavcodec \
+-lavutil \
+-lswscale \
+-lSDL2 \
+-lSDL2_ttf \
+`pkg-config --cflags --libs opencv4` \
+-pthread
+
 
 Running the Server:
-./rknn_server yolov8s.rknn classes.txt 0.7
+./rknn_server ../yolov8s.rknn ../classes.txt 0.7
 
 ./rknn_rtsp rtsp://cam1
 ./rknn_rtsp rtsp://cam2
