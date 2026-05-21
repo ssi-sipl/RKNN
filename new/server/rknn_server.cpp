@@ -13,6 +13,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 struct Detection{
     int x1,y1,x2,y2;
@@ -35,11 +36,9 @@ void load_classes(const char* file){
 
     std::string s;
 
-    while(std::getline(f,s)){
-
+    while(std::getline(f,s))
         if(!s.empty())
             classes.push_back(s);
-    }
 }
 
 void load_model(const char* p){
@@ -62,63 +61,83 @@ void load_model(const char* p){
     (unsigned char*)
     malloc(size);
 
-    fread(
-        model,
-        1,
-        size,
-        fp
-    );
+    fread(model,1,size,fp);
 
     fclose(fp);
 
-    if(
-        rknn_init(
+    rknn_init(
         &ctx,
         model,
         size,
         0,
         nullptr
-        )<0
-    ){
-
-        std::cout
-        <<"rknn init failed\n";
-
-        exit(-1);
-    }
+    );
 
     free(model);
 
-    std::cout
-    <<"model loaded\n";
+    std::cout<<"model loaded\n";
 }
 
 void handle(int client){
 
+fcntl(
+client,
+F_SETFL,
+O_NONBLOCK
+);
+
 while(true){
 
-    int sz;
+    int sz=-1;
 
-    int r=
-    recv(
-        client,
-        &sz,
-        sizeof(int),
-        MSG_WAITALL
-    );
+    int latest_sz=-1;
 
-    if(r<=0)
-        break;
+    while(true){
+
+        int r=
+        recv(
+            client,
+            &latest_sz,
+            sizeof(int),
+            MSG_DONTWAIT
+        );
+
+        if(r<=0)
+            break;
+
+        sz=latest_sz;
+    }
+
+    if(sz<=0){
+
+        usleep(1000);
+
+        continue;
+    }
 
     std::vector<unsigned char>
     data(sz);
 
-    recv(
-        client,
-        data.data(),
-        sz,
-        MSG_WAITALL
-    );
+    int received=0;
+
+    while(received<sz){
+
+        int r=
+        recv(
+            client,
+            data.data()+received,
+            sz-received,
+            0
+        );
+
+        if(r<=0)
+            break;
+
+        received+=r;
+    }
+
+    if(received!=sz)
+        continue;
 
     cv::Mat frame=
     cv::imdecode(
@@ -134,10 +153,6 @@ while(true){
 
     int orig_h=
     frame.rows;
-
-    //-----------------------------------------
-    // exact preprocessing from working code
-    //-----------------------------------------
 
     float scale=
     std::min(
@@ -180,7 +195,6 @@ while(true){
     (640-nh)/2;
 
     resized.copyTo(
-
         input(
             cv::Rect(
                 left,
@@ -191,27 +205,7 @@ while(true){
         )
     );
 
-    //-----------------------------------------
-    // thread-safe NPU access
-    //-----------------------------------------
-
-    rknn_output outputs[1];
-
-    memset(
-        outputs,
-        0,
-        sizeof(outputs)
-    );
-
-    outputs[0].want_float=1;
-
-    rknn_input inputs[1];
-
-    memset(
-        inputs,
-        0,
-        sizeof(inputs)
-    );
+    rknn_input inputs[1]={0};
 
     inputs[0].index=0;
 
@@ -227,50 +221,32 @@ while(true){
     inputs[0].buf=
     input.data;
 
+    rknn_output outputs[1]={0};
+
+    outputs[0].want_float=1;
+
     rknn_mutex.lock();
 
-    if(
-        rknn_inputs_set(
+    rknn_inputs_set(
         ctx,
         1,
         inputs
-        )<0
-    ){
+    );
 
-        rknn_mutex.unlock();
-
-        continue;
-    }
-
-    if(
-        rknn_run(
+    rknn_run(
         ctx,
         nullptr
-        )<0
-    ){
+    );
 
-        rknn_mutex.unlock();
-
-        continue;
-    }
-
-    if(
-        rknn_outputs_get(
+    rknn_outputs_get(
         ctx,
         1,
         outputs,
         nullptr
-        )<0
-    ){
-
-        rknn_mutex.unlock();
-
-        continue;
-    }
+    );
 
     float* pred=
-    (float*)
-    outputs[0].buf;
+    (float*)outputs[0].buf;
 
     std::vector<Detection>
     local;
@@ -304,32 +280,22 @@ while(true){
         ){
 
             float s=
-            pred[
-            (c+4)
-            *8400+i
-            ];
+            pred[(c+4)*8400+i];
 
             if(s>best){
 
                 best=s;
-
                 cls=c;
             }
         }
 
         if(best<conf)
-        continue;
+            continue;
 
-        x=
-        (x-left)
-        /scale;
-
-        y=
-        (y-top)
-        /scale;
+        x=(x-left)/scale;
+        y=(y-top)/scale;
 
         w/=scale;
-
         h/=scale;
 
         Detection d;
@@ -369,12 +335,6 @@ while(true){
 
         d.cls=cls;
 
-        memset(
-        d.label,
-        0,
-        sizeof(d.label)
-        );
-
         strncpy(
         d.label,
         classes[cls].c_str(),
@@ -393,24 +353,20 @@ while(true){
     for(auto& d:local){
 
         boxes.push_back(
-
-        cv::Rect(
-
-        d.x1,
-        d.y1,
-
-        d.x2-d.x1,
-
-        d.y2-d.y1
-        ));
+            cv::Rect(
+                d.x1,
+                d.y1,
+                d.x2-d.x1,
+                d.y2-d.y1
+            )
+        );
 
         scores.push_back(
-        d.score
+            d.score
         );
     }
 
-    std::vector<int>
-    idx;
+    std::vector<int> idx;
 
     cv::dnn::NMSBoxes(
         boxes,
@@ -423,14 +379,10 @@ while(true){
     std::vector<Detection>
     final_det;
 
-    for(
-    int i:idx
-    ){
-
+    for(int i:idx)
         final_det.push_back(
         local[i]
         );
-    }
 
     rknn_outputs_release(
         ctx,
@@ -450,7 +402,7 @@ while(true){
         0
     );
 
-    if(n>0){
+    if(n){
 
         send(
             client,
@@ -469,27 +421,12 @@ int argc,
 char** argv
 ){
 
-if(argc<4){
+load_model(argv[1]);
 
-std::cout
-<<"Usage:\n"
-<<"./rknn_server model.rknn classes.txt .7\n";
-
-return -1;
-}
-
-load_model(
-argv[1]
-);
-
-load_classes(
-argv[2]
-);
+load_classes(argv[2]);
 
 conf=
-atof(
-argv[3]
-);
+atof(argv[3]);
 
 int server=
 socket(
@@ -498,15 +435,22 @@ SOCK_STREAM,
 0
 );
 
+int opt=1;
+
+setsockopt(
+server,
+SOL_SOCKET,
+SO_REUSEADDR,
+&opt,
+sizeof(opt)
+);
+
 sockaddr_in addr;
 
-addr.sin_family=
-AF_INET;
+addr.sin_family=AF_INET;
 
 addr.sin_port=
-htons(
-9000
-);
+htons(9000);
 
 addr.sin_addr.s_addr=
 INADDR_ANY;
@@ -533,9 +477,6 @@ server,
 0,
 0
 );
-
-std::cout
-<<"client connected\n";
 
 std::thread(
 handle,

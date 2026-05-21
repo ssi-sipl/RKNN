@@ -294,7 +294,10 @@ SDL_UnlockMutex(frame_mutex);
 
 SDL_LockMutex(infer_mutex);
 
-infer_bgr=copy;
+
+infer_bgr.release();
+
+infer_bgr = copy.clone();
 
 infer_ready=true;
 
