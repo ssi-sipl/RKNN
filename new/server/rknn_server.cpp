@@ -4,6 +4,7 @@
 #include <fstream>
 #include <cstring>
 #include <mutex>
+#include <sys/ioctl.h>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/dnn.hpp>
@@ -80,64 +81,83 @@ void load_model(const char* p){
 
 void handle(int client){
 
-fcntl(
-client,
-F_SETFL,
-O_NONBLOCK
-);
-
 while(true){
 
-    int sz=-1;
+    //------------------------------------
+    // get frame size normally
+    //------------------------------------
 
-    int latest_sz=-1;
+    int sz;
 
-    while(true){
+    int r=
+    recv(
+        client,
+        &sz,
+        sizeof(int),
+        MSG_WAITALL
+    );
 
-        int r=
+    if(r<=0)
+        break;
+
+    //------------------------------------
+    // discard queued old frames
+    //------------------------------------
+
+    int pending=0;
+
+    ioctl(
+        client,
+        FIONREAD,
+        &pending
+    );
+
+    while(
+        pending>
+        (int)sizeof(int)
+    ){
+
+        int next_sz;
+
         recv(
             client,
-            &latest_sz,
+            &next_sz,
             sizeof(int),
-            MSG_DONTWAIT
+            MSG_WAITALL
         );
 
-        if(r<=0)
-            break;
+        std::vector<char>
+        trash(next_sz);
 
-        sz=latest_sz;
+        recv(
+            client,
+            trash.data(),
+            next_sz,
+            MSG_WAITALL
+        );
+
+        sz=next_sz;
+
+        ioctl(
+            client,
+            FIONREAD,
+            &pending
+        );
     }
 
-    if(sz<=0){
-
-        usleep(1000);
-
-        continue;
-    }
+    //------------------------------------
+    // receive newest image
+    //------------------------------------
 
     std::vector<unsigned char>
     data(sz);
 
-    int received=0;
-
-    while(received<sz){
-
-        int r=
-        recv(
-            client,
-            data.data()+received,
-            sz-received,
-            0
-        );
-
-        if(r<=0)
-            break;
-
-        received+=r;
-    }
-
-    if(received!=sz)
-        continue;
+    recv(
+        client,
+        data.data(),
+        sz,
+        MSG_WAITALL
+    );
 
     cv::Mat frame=
     cv::imdecode(
@@ -153,6 +173,10 @@ while(true){
 
     int orig_h=
     frame.rows;
+
+    //------------------------------------
+    // exact working preprocessing
+    //------------------------------------
 
     float scale=
     std::min(
@@ -195,15 +219,17 @@ while(true){
     (640-nh)/2;
 
     resized.copyTo(
-        input(
-            cv::Rect(
-                left,
-                top,
-                nw,
-                nh
-            )
-        )
-    );
+    input(
+    cv::Rect(
+    left,
+    top,
+    nw,
+    nh
+    )));
+
+    //------------------------------------
+    // RKNN
+    //------------------------------------
 
     rknn_input inputs[1]={0};
 
@@ -225,7 +251,8 @@ while(true){
 
     outputs[0].want_float=1;
 
-    rknn_mutex.lock();
+    std::lock_guard<std::mutex>
+    lock(rknn_mutex);
 
     rknn_inputs_set(
         ctx,
@@ -246,7 +273,8 @@ while(true){
     );
 
     float* pred=
-    (float*)outputs[0].buf;
+    (float*)
+    outputs[0].buf;
 
     std::vector<Detection>
     local;
@@ -280,7 +308,10 @@ while(true){
         ){
 
             float s=
-            pred[(c+4)*8400+i];
+            pred[
+            (c+4)
+            *8400+i
+            ];
 
             if(s>best){
 
@@ -325,8 +356,7 @@ while(true){
         );
 
         if(
-        d.x2-d.x1<15
-        ||
+        d.x2-d.x1<15 ||
         d.y2-d.y1<15
         )
         continue;
@@ -334,6 +364,12 @@ while(true){
         d.score=best;
 
         d.cls=cls;
+
+        memset(
+        d.label,
+        0,
+        sizeof(d.label)
+        );
 
         strncpy(
         d.label,
@@ -353,16 +389,15 @@ while(true){
     for(auto& d:local){
 
         boxes.push_back(
-            cv::Rect(
-                d.x1,
-                d.y1,
-                d.x2-d.x1,
-                d.y2-d.y1
-            )
-        );
+        cv::Rect(
+        d.x1,
+        d.y1,
+        d.x2-d.x1,
+        d.y2-d.y1
+        ));
 
         scores.push_back(
-            d.score
+        d.score
         );
     }
 
@@ -389,8 +424,6 @@ while(true){
         1,
         outputs
     );
-
-    rknn_mutex.unlock();
 
     int n=
     final_det.size();
