@@ -4,7 +4,6 @@
 #include <fstream>
 #include <cstring>
 #include <mutex>
-#include <sys/ioctl.h>
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/dnn.hpp>
@@ -14,7 +13,6 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <fcntl.h>
 
 struct Detection{
     int x1,y1,x2,y2;
@@ -37,9 +35,11 @@ void load_classes(const char* file){
 
     std::string s;
 
-    while(std::getline(f,s))
+    while(std::getline(f,s)){
+
         if(!s.empty())
             classes.push_back(s);
+    }
 }
 
 void load_model(const char* p){
@@ -62,30 +62,40 @@ void load_model(const char* p){
     (unsigned char*)
     malloc(size);
 
-    fread(model,1,size,fp);
+    fread(
+        model,
+        1,
+        size,
+        fp
+    );
 
     fclose(fp);
 
-    rknn_init(
-        &ctx,
-        model,
-        size,
-        0,
-        nullptr
-    );
+    if(
+        rknn_init(
+            &ctx,
+            model,
+            size,
+            0,
+            nullptr
+        )<0
+    ){
+
+        std::cout
+        <<"rknn init fail\n";
+
+        exit(-1);
+    }
 
     free(model);
 
-    std::cout<<"model loaded\n";
+    std::cout
+    <<"model loaded\n";
 }
 
 void handle(int client){
 
 while(true){
-
-    //------------------------------------
-    // get frame size normally
-    //------------------------------------
 
     int sz;
 
@@ -100,64 +110,36 @@ while(true){
     if(r<=0)
         break;
 
-    //------------------------------------
-    // discard queued old frames
-    //------------------------------------
-
-    int pending=0;
-
-    ioctl(
-        client,
-        FIONREAD,
-        &pending
-    );
-
-    while(
-        pending>
-        (int)sizeof(int)
-    ){
-
-        int next_sz;
-
-        recv(
-            client,
-            &next_sz,
-            sizeof(int),
-            MSG_WAITALL
-        );
-
-        std::vector<char>
-        trash(next_sz);
-
-        recv(
-            client,
-            trash.data(),
-            next_sz,
-            MSG_WAITALL
-        );
-
-        sz=next_sz;
-
-        ioctl(
-            client,
-            FIONREAD,
-            &pending
-        );
-    }
-
-    //------------------------------------
-    // receive newest image
-    //------------------------------------
+    if(
+        sz<=0
+        ||
+        sz>20*1024*1024
+    )
+        continue;
 
     std::vector<unsigned char>
     data(sz);
 
-    recv(
-        client,
-        data.data(),
-        sz,
-        MSG_WAITALL
-    );
+    int received=0;
+
+    while(received<sz){
+
+        r=
+        recv(
+            client,
+            data.data()+received,
+            sz-received,
+            MSG_WAITALL
+        );
+
+        if(r<=0)
+            break;
+
+        received+=r;
+    }
+
+    if(received!=sz)
+        continue;
 
     cv::Mat frame=
     cv::imdecode(
@@ -174,9 +156,9 @@ while(true){
     int orig_h=
     frame.rows;
 
-    //------------------------------------
-    // exact working preprocessing
-    //------------------------------------
+    //----------------------------------
+    // SAME PREPROCESS AS WORKING CODE
+    //----------------------------------
 
     float scale=
     std::min(
@@ -219,19 +201,23 @@ while(true){
     (640-nh)/2;
 
     resized.copyTo(
-    input(
-    cv::Rect(
-    left,
-    top,
-    nw,
-    nh
-    )));
+        input(
+            cv::Rect(
+                left,
+                top,
+                nw,
+                nh
+            )
+        )
+    );
 
-    //------------------------------------
-    // RKNN
-    //------------------------------------
+    rknn_input inputs[1];
 
-    rknn_input inputs[1]={0};
+    memset(
+        inputs,
+        0,
+        sizeof(inputs)
+    );
 
     inputs[0].index=0;
 
@@ -247,30 +233,49 @@ while(true){
     inputs[0].buf=
     input.data;
 
-    rknn_output outputs[1]={0};
+    rknn_output outputs[1];
+
+    memset(
+        outputs,
+        0,
+        sizeof(outputs)
+    );
 
     outputs[0].want_float=1;
+
+    //----------------------------------
+    // THREAD SAFE RKNN
+    //----------------------------------
 
     std::lock_guard<std::mutex>
     lock(rknn_mutex);
 
-    rknn_inputs_set(
-        ctx,
-        1,
-        inputs
-    );
+    if(
+        rknn_inputs_set(
+            ctx,
+            1,
+            inputs
+        )<0
+    )
+        continue;
 
-    rknn_run(
-        ctx,
-        nullptr
-    );
+    if(
+        rknn_run(
+            ctx,
+            nullptr
+        )<0
+    )
+        continue;
 
-    rknn_outputs_get(
-        ctx,
-        1,
-        outputs,
-        nullptr
-    );
+    if(
+        rknn_outputs_get(
+            ctx,
+            1,
+            outputs,
+            nullptr
+        )<0
+    )
+        continue;
 
     float* pred=
     (float*)
@@ -280,9 +285,9 @@ while(true){
     local;
 
     for(
-    int i=0;
-    i<8400;
-    i++
+        int i=0;
+        i<8400;
+        i++
     ){
 
         float x=
@@ -302,9 +307,9 @@ while(true){
         int cls=-1;
 
         for(
-        int c=0;
-        c<classes.size();
-        c++
+            int c=0;
+            c<classes.size();
+            c++
         ){
 
             float s=
@@ -316,6 +321,7 @@ while(true){
             if(s>best){
 
                 best=s;
+
                 cls=c;
             }
         }
@@ -323,62 +329,81 @@ while(true){
         if(best<conf)
             continue;
 
-        x=(x-left)/scale;
-        y=(y-top)/scale;
+        x=
+        (x-left)
+        /scale;
 
-        w/=scale;
-        h/=scale;
+        y=
+        (y-top)
+        /scale;
+
+        w/=
+        scale;
+
+        h/=
+        scale;
 
         Detection d;
 
         d.x1=
         std::max(
         0,
-        int(x-w/2)
-        );
+        int(
+        x-w/2
+        ));
 
         d.y1=
         std::max(
         0,
-        int(y-h/2)
-        );
+        int(
+        y-h/2
+        ));
 
         d.x2=
         std::min(
         orig_w-1,
-        int(x+w/2)
-        );
+        int(
+        x+w/2
+        ));
 
         d.y2=
         std::min(
         orig_h-1,
-        int(y+h/2)
-        );
+        int(
+        y+h/2
+        ));
 
         if(
-        d.x2-d.x1<15 ||
+        d.x2-d.x1<15
+        ||
         d.y2-d.y1<15
         )
         continue;
 
-        d.score=best;
+        d.score=
+        best;
 
-        d.cls=cls;
+        d.cls=
+        cls;
 
         memset(
-        d.label,
-        0,
-        sizeof(d.label)
+            d.label,
+            0,
+            sizeof(d.label)
         );
 
         strncpy(
-        d.label,
-        classes[cls].c_str(),
-        63
+            d.label,
+            classes[cls].c_str(),
+            63
         );
 
         local.push_back(d);
     }
+
+    //----------------------------------
+    // NMS
+    //----------------------------------
 
     std::vector<cv::Rect>
     boxes;
@@ -389,19 +414,21 @@ while(true){
     for(auto& d:local){
 
         boxes.push_back(
-        cv::Rect(
-        d.x1,
-        d.y1,
-        d.x2-d.x1,
-        d.y2-d.y1
-        ));
+            cv::Rect(
+                d.x1,
+                d.y1,
+                d.x2-d.x1,
+                d.y2-d.y1
+            )
+        );
 
         scores.push_back(
-        d.score
+            d.score
         );
     }
 
-    std::vector<int> idx;
+    std::vector<int>
+    idx;
 
     cv::dnn::NMSBoxes(
         boxes,
@@ -444,15 +471,26 @@ while(true){
             0
         );
     }
+
 }
 
 close(client);
+
 }
 
 int main(
 int argc,
 char** argv
 ){
+
+if(argc<4){
+
+std::cout
+<<"Usage:\n"
+<<"./rknn_server model.rknn classes.txt .7\n";
+
+return -1;
+}
 
 load_model(argv[1]);
 
@@ -495,8 +533,7 @@ sizeof(addr)
 );
 
 listen(
-server,
-20
+server,20
 );
 
 std::cout
@@ -511,9 +548,13 @@ server,
 0
 );
 
+std::cout
+<<"client connected\n";
+
 std::thread(
 handle,
 client
 ).detach();
+
 }
 }
