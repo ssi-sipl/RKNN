@@ -99,6 +99,6 @@ g++ rknn_rtsp.cpp \
 Running the Server:
 ./rknn_server ../yolov8s.rknn ../classes.txt 0.7
 
-./rknn_rtsp rtsp://cam1
+./rknn_rtsp "rtsp://admin:123456Ai@192.168.1.69:554/snl/live/1/1"
 ./rknn_rtsp rtsp://cam2
 ./rknn_rtsp rtsp://cam3
